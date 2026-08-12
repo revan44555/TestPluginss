@@ -1,7 +1,6 @@
 package com.ninjagoizlesene
 
 import com.lagradost.cloudstream3.Episode
-import com.lagradost.cloudstream3.ExtractorLink
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.SearchResponse
@@ -11,6 +10,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.newTvSeriesSearchResponse
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 
 class NinjagoIzleseneProvider : MainAPI() {
@@ -45,8 +45,7 @@ class NinjagoIzleseneProvider : MainAPI() {
             if (title.isBlank()) continue
             if (!title.contains(query, ignoreCase = true)) continue
 
-            val poster: String? = link
-                .select("img")
+            val poster: String? = link.select("img")
                 .attr("src")
                 .ifBlank {
                     link.select("img").attr("data-src")
@@ -150,18 +149,18 @@ class NinjagoIzleseneProvider : MainAPI() {
 
         var foundLink = false
 
-        // iframe video kaynakları
         for (iframe in doc.select("iframe")) {
-
-            val iframeUrl = iframe
-                .attr("src")
+            val iframeUrl = iframe.attr("src")
                 .ifBlank {
                     iframe.attr("data-src")
                 }
 
             if (iframeUrl.isBlank()) continue
 
-            val absoluteIframeUrl = if (iframeUrl.startsWith("http")) {
+            val absoluteIframeUrl = if (
+                iframeUrl.startsWith("http://") ||
+                iframeUrl.startsWith("https://")
+            ) {
                 iframeUrl
             } else {
                 mainUrl.trimEnd('/') + "/" + iframeUrl.trimStart('/')
@@ -174,14 +173,12 @@ class NinjagoIzleseneProvider : MainAPI() {
                     subtitleCallback,
                     callback
                 )
-
                 foundLink = true
             } catch (_: Exception) {
-                // Bir iframe çalışmazsa diğerlerini denemeye devam et.
+                // Diğer video kaynaklarını denemeye devam et.
             }
         }
 
-        // Google Drive bağlantıları
         val pageText = doc.html()
 
         val driveRegex = Regex(
@@ -189,7 +186,6 @@ class NinjagoIzleseneProvider : MainAPI() {
         )
 
         for (match in driveRegex.findAll(pageText)) {
-
             val driveUrl = match.value
                 .trimEnd('"', '\'', ')', ']', '>')
 
@@ -200,13 +196,12 @@ class NinjagoIzleseneProvider : MainAPI() {
                     subtitleCallback,
                     callback
                 )
-
                 foundLink = true
             } catch (_: Exception) {
-                // Drive extractor desteklenmiyorsa diğer kaynakları dene.
+                // Diğer kaynakları denemeye devam et.
             }
         }
 
         return foundLink
     }
-} 
+}
