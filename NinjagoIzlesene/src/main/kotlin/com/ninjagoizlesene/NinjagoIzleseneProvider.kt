@@ -16,10 +16,6 @@ class NinjagoIzleseneProvider : MainAPI() {
         TvType.TvSeries
     )
 
-    // ---------------------------------------------------------
-    // SEARCH
-    // ---------------------------------------------------------
-
     override suspend fun search(
         query: String
     ): List<SearchResponse> {
@@ -58,13 +54,6 @@ class NinjagoIzleseneProvider : MainAPI() {
                 .split('/')
                 .filter { it.isNotBlank() }
 
-            /*
-             * Sadece:
-             *
-             * /dizi/dizi-adi/
-             *
-             * şeklindeki ana dizi sayfalarını al.
-             */
             if (pathParts.size != 2) {
                 continue
             }
@@ -88,8 +77,7 @@ class NinjagoIzleseneProvider : MainAPI() {
             }
 
             if (title.isBlank()) {
-                title = link
-                    .selectFirst("img")
+                title = link.selectFirst("img")
                     ?.attr("alt")
                     ?.replace(Regex("\\s+"), " ")
                     ?.trim()
@@ -112,35 +100,29 @@ class NinjagoIzleseneProvider : MainAPI() {
                 continue
             }
 
-            if (!title.contains(
-                    searchQuery,
-                    ignoreCase = true
-                )
-            ) {
+            if (!title.contains(searchQuery, ignoreCase = true)) {
                 continue
             }
 
-            val poster = link
-                .selectFirst("img")
-                ?.let { img ->
+            val poster = link.selectFirst("img")?.let { img ->
 
-                    img.attr("src")
-                        .ifBlank {
-                            img.attr("data-src")
-                        }
-                        .ifBlank {
-                            img.attr("data-lazy-src")
-                        }
-                        .ifBlank {
-                            img.attr("data-original")
-                        }
-                        .takeIf {
-                            it.isNotBlank()
-                        }
-                        ?.let {
-                            fixUrl(it)
-                        }
-                }
+                img.attr("src")
+                    .ifBlank {
+                        img.attr("data-src")
+                    }
+                    .ifBlank {
+                        img.attr("data-lazy-src")
+                    }
+                    .ifBlank {
+                        img.attr("data-original")
+                    }
+                    .takeIf {
+                        it.isNotBlank()
+                    }
+                    ?.let {
+                        fixUrl(it)
+                    }
+            }
 
             results.add(
                 newTvSeriesSearchResponse(
@@ -156,19 +138,13 @@ class NinjagoIzleseneProvider : MainAPI() {
         return results
     }
 
-    // ---------------------------------------------------------
-    // LOAD SERIES
-    // ---------------------------------------------------------
-
     override suspend fun load(
         url: String
     ): LoadResponse {
 
         val fixedUrl = fixUrl(url)
 
-        val doc = app.get(
-            fixedUrl
-        ).document
+        val doc = app.get(fixedUrl).document
 
         val title =
             doc.selectFirst("h1")
@@ -209,6 +185,9 @@ class NinjagoIzleseneProvider : MainAPI() {
                             .ifBlank {
                                 img.attr("data-lazy-src")
                             }
+                            .ifBlank {
+                                img.attr("data-original")
+                            }
                             .takeIf {
                                 it.isNotBlank()
                             }
@@ -241,8 +220,7 @@ class NinjagoIzleseneProvider : MainAPI() {
         for (link in doc.select("a[href]")) {
 
             val rawHref =
-                link.attr("href")
-                    .trim()
+                link.attr("href").trim()
 
             if (rawHref.isBlank()) {
                 continue
@@ -257,30 +235,19 @@ class NinjagoIzleseneProvider : MainAPI() {
 
             val text =
                 link.text()
-                    .replace(
-                        Regex("\\s+"),
-                        " "
-                    )
+                    .replace(Regex("\\s+"), " ")
                     .trim()
 
             if (text.isBlank()) {
                 continue
             }
 
-            /*
-             * Örnek:
-             *
-             * 4. Sezon 10. Bölüm
-             */
             val match =
                 Regex(
                     """(\d+)\s*\.\s*Sezon\s+(\d+)\s*\.\s*Bölüm""",
                     RegexOption.IGNORE_CASE
                 ).find(text)
 
-            /*
-             * Eğer metinden bulamazsak URL'ye bak.
-             */
             val urlMatch =
                 Regex(
                     """(\d+)[^\d]+sezon[^\d]+(\d+)[^\d]+b[oö]l[uü]m""",
@@ -321,8 +288,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                         RegexOption.IGNORE_CASE
                     ),
                     ""
-                )
-                    .trim()
+                ).trim()
 
             episodeName =
                 episodeName
@@ -353,11 +319,9 @@ class NinjagoIzleseneProvider : MainAPI() {
         val sortedEpisodes =
             episodes.sortedWith(
                 compareBy<Episode> {
-                    it.season
-                        ?: Int.MAX_VALUE
+                    it.season ?: Int.MAX_VALUE
                 }.thenBy {
-                    it.episode
-                        ?: Int.MAX_VALUE
+                    it.episode ?: Int.MAX_VALUE
                 }
             )
 
@@ -376,10 +340,6 @@ class NinjagoIzleseneProvider : MainAPI() {
         }
     }
 
-    // ---------------------------------------------------------
-    // LOAD VIDEO LINKS
-    // ---------------------------------------------------------
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -397,21 +357,14 @@ class NinjagoIzleseneProvider : MainAPI() {
             false
 
         /*
-         * =====================================================
-         * PLAYER / IFRAME BULMA
-         * =====================================================
-         *
-         * Player 2'de yaptığımız incelemede:
+         * Player 2:
          *
          * src="about:blank"
          *
-         * ancak:
+         * gerçek kaynak:
          *
-         * data-src="//ok.ru/videoembed/13754930825959?nochat=1"
+         * data-src="//ok.ru/videoembed/..."
          *
-         * olduğunu bulduk.
-         *
-         * Bu nedenle SADECE iframe[src] kullanmıyoruz.
          */
 
         val iframeUrls =
@@ -419,14 +372,12 @@ class NinjagoIzleseneProvider : MainAPI() {
                 .mapNotNull { iframe ->
 
                     val dataSrc =
-                        iframe.attr(
-                            "data-src"
-                        ).trim()
+                        iframe.attr("data-src")
+                            .trim()
 
                     val src =
-                        iframe.attr(
-                            "src"
-                        ).trim()
+                        iframe.attr("src")
+                            .trim()
 
                     val selected =
                         when {
@@ -461,10 +412,6 @@ class NinjagoIzleseneProvider : MainAPI() {
                 }
                 .distinct()
 
-        /*
-         * Bulduğumuz bütün iframe'leri CloudStream
-         * extractor sistemine gönder.
-         */
         for (iframeUrl in iframeUrls) {
 
             try {
@@ -480,17 +427,12 @@ class NinjagoIzleseneProvider : MainAPI() {
                     true
 
             } catch (_: Exception) {
-                /*
-                 * Bir player başarısız olursa
-                 * diğer playerları dene.
-                 */
+                // Diğer playerları denemeye devam et.
             }
         }
 
         /*
-         * =====================================================
-         * VIDEO / SOURCE
-         * =====================================================
+         * Doğrudan video/source kaynakları.
          */
 
         val videoUrls =
@@ -520,7 +462,6 @@ class NinjagoIzleseneProvider : MainAPI() {
                     url = videoUrl,
                     type = ExtractorLinkType.VIDEO
                 ) {
-
                     this.referer =
                         pageUrl
                 }
@@ -531,9 +472,7 @@ class NinjagoIzleseneProvider : MainAPI() {
         }
 
         /*
-         * =====================================================
-         * DOĞRUDAN MP4 / M3U8
-         * =====================================================
+         * HTML içinde doğrudan MP4/M3U8 varsa.
          */
 
         val html =
@@ -566,7 +505,6 @@ class NinjagoIzleseneProvider : MainAPI() {
                     url = directUrl,
                     type = ExtractorLinkType.VIDEO
                 ) {
-
                     this.referer =
                         pageUrl
                 }
@@ -578,10 +516,6 @@ class NinjagoIzleseneProvider : MainAPI() {
 
         return foundLink
     }
-
-    // ---------------------------------------------------------
-    // URL HELPER
-    // ---------------------------------------------------------
 
     private fun fixUrl(
         url: String
@@ -599,12 +533,8 @@ class NinjagoIzleseneProvider : MainAPI() {
         }
 
         if (
-            value.startsWith(
-                "http://"
-            ) ||
-            value.startsWith(
-                "https://"
-            )
+            value.startsWith("http://") ||
+            value.startsWith("https://")
         ) {
             return value
         }
@@ -614,7 +544,5 @@ class NinjagoIzleseneProvider : MainAPI() {
         }
 
         return "$mainUrl/$value"
-    
-    } 
-
+    }
 }
