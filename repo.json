@@ -1,0 +1,9 @@
+{
+    "name": "NinjagoIzlesene Repo",
+    "description": "Ninjago İzlesene eklentisi",
+    "manifestVersion": 1,
+    "pluginLists": [
+        "https://raw.githubusercontent.com/Revan44555/TestPluginss/builds/plugins.json"
+    ]
+}
+  
