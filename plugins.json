@@ -11,7 +11,8 @@
             "revan44555"
         ],
         "tvTypes": [
-            "TvSeries"
+            "TvSeries",
+            "Movie"
         ],
         "version": 3,
         "internalName": "NinjagoIzlesene",
