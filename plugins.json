@@ -1,10 +1,10 @@
 [
     {
         "iconUrl": "https://www.google.com/s2/favicons?domain=ninjagoizlesene.com.tr&sz=%size%",
-        "fileHash": "sha256-c229e4d171aaec7394576e3f79ceb4b62a262ea874cdde737fb5265eaa5637fa",
+        "fileHash": "sha256-d905d5c3b9946d437eeba272557f2d35761d3813aa7d635f6739264a25d3c8b9",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/revan44555/TestPluginss",
-        "fileSize": 54517,
+        "fileSize": 55044,
         "status": 1,
         "language": "tr",
         "authors": [
@@ -14,7 +14,7 @@
             "TvSeries",
             "Movie"
         ],
-        "version": 6,
+        "version": 7,
         "internalName": "NinjagoIzlesene",
         "description": "Ninjago \u0130zlesene \u2014 Ninjago b\u00f6l\u00fcmlerini izleme eklentisi",
         "url": "https://raw.githubusercontent.com/revan44555/TestPluginss/builds/NinjagoIzlesene.cs3",
