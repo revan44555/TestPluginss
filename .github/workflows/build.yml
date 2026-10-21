@@ -11,6 +11,9 @@ on:
       - main
     paths-ignore:
       - "*.md"
+      # CI'in kendi urettigi builds/ klasoru master'a push'landiginda
+      # workflow'u tekrar tetiklemesin (sonsuz dongu onlemi).
+      - "builds/**"
 
 jobs:
   build:
@@ -20,26 +23,22 @@ jobs:
 
       - name: Checkout source
         uses: actions/checkout@v6
-        with:
-          path: src
-
-      - name: Checkout builds
-        uses: actions/checkout@v6
-        with:
-          ref: builds
-          path: builds
 
       - name: Preserve Ninjago release and clean old builds
         run: |
           # NinjagoIzlesene is intentionally frozen. Save its published binary and
-          # repository metadata before rebuilding the other plugins.
+          # repository metadata before rebuilding the other plugins. On the very
+          # first run the builds/ folder does not exist yet; that is fine.
           preserve_dir="$RUNNER_TEMP/ninjago-preserve"
           mkdir -p "$preserve_dir"
-          cp "$GITHUB_WORKSPACE/builds/NinjagoIzlesene.cs3" "$preserve_dir/NinjagoIzlesene.cs3"
-          cp "$GITHUB_WORKSPACE/builds/plugins.json" "$preserve_dir/plugins.json"
-
-          rm -f "$GITHUB_WORKSPACE"/builds/*.cs3
-          rm -f "$GITHUB_WORKSPACE"/builds/plugins.json
+          if [ -f "$GITHUB_WORKSPACE/builds/NinjagoIzlesene.cs3" ]; then
+            cp "$GITHUB_WORKSPACE/builds/NinjagoIzlesene.cs3" "$preserve_dir/NinjagoIzlesene.cs3"
+            echo "NINJAGO_PRESERVED=true" >> "$GITHUB_ENV"
+          fi
+          if [ -f "$GITHUB_WORKSPACE/builds/plugins.json" ]; then
+            cp "$GITHUB_WORKSPACE/builds/plugins.json" "$preserve_dir/plugins.json"
+          fi
+          rm -rf "$GITHUB_WORKSPACE/builds"
 
       - name: Setup Java 17
         uses: actions/setup-java@v5
@@ -57,27 +56,24 @@ jobs:
           cache-provider: basic
 
       - name: Run unit tests
-        working-directory: src
-        run: |
-          gradle test --stacktrace
+        run: gradle test --stacktrace
 
       - name: Build Plugins
-        working-directory: src
+        run: gradle make makePluginsJson --stacktrace
+
+      - name: Collect builds and keep Ninjago unchanged
         run: |
-          gradle make makePluginsJson --stacktrace
+          mkdir -p "$GITHUB_WORKSPACE/builds"
+          find . -path '*/build/*.cs3' -exec cp {} "$GITHUB_WORKSPACE/builds/" \;
+          cp build/plugins.json "$GITHUB_WORKSPACE/builds/"
 
-      - name: Copy builds and keep Ninjago unchanged
-        run: |
-          cp src/**/build/*.cs3 "$GITHUB_WORKSPACE/builds/"
-          cp src/build/plugins.json "$GITHUB_WORKSPACE/builds/"
+          # Ilk kosu disinda: yayinlanmis Ninjago paketinin birebir ayni
+          # baytlarini geri koy, registry kaydini da eskiyle esitle.
+          if [ "${NINJAGO_PRESERVED}" = "true" ]; then
+            preserve_dir="$RUNNER_TEMP/ninjago-preserve"
+            cp "$preserve_dir/NinjagoIzlesene.cs3" "$GITHUB_WORKSPACE/builds/NinjagoIzlesene.cs3"
 
-          # Restore the exact published Ninjago package bytes rather than
-          # publishing a freshly rebuilt binary for the frozen plugin.
-          preserve_dir="$RUNNER_TEMP/ninjago-preserve"
-          cp "$preserve_dir/NinjagoIzlesene.cs3" "$GITHUB_WORKSPACE/builds/NinjagoIzlesene.cs3"
-
-          # Keep the existing Ninjago registry entry in sync with those exact bytes.
-          python3 - "$preserve_dir/plugins.json" "$GITHUB_WORKSPACE/builds/plugins.json" <<'PY'
+            python3 - "$preserve_dir/plugins.json" "$GITHUB_WORKSPACE/builds/plugins.json" <<'PY'
           import json
           import sys
 
@@ -107,14 +103,14 @@ jobs:
               json.dump(rebuilt, file, ensure_ascii=False, indent=4)
               file.write("\n")
           PY
+          fi
 
       - name: Push builds
-        working-directory: builds
         run: |
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
 
-          git add .
+          git add builds
 
           git diff --cached --quiet || \
             git commit -m "Build $GITHUB_SHA"
