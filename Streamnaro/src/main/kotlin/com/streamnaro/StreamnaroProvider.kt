@@ -303,6 +303,24 @@ class StreamnaroProvider : MainAPI() {
     private fun safeHttpsUrl(value: String?): String? =
         StreamnaroParsing.safeHttpsUrl(value)
 
+    private fun yearField(node: JsonNode): Int? =
+        intField(node, "year")
+            ?: textField(node, "year")?.take(4)?.toIntOrNull()
+            ?: textField(node, "releaseInfo")?.take(4)?.toIntOrNull()
+
+    private fun scoreField(node: JsonNode): Score? {
+        val rating = textField(node, "imdbRating")?.toFloatOrNull() ?: return null
+        if (!rating.isFinite() || rating !in 0f..10f) return null
+        return Score.from10(rating)
+    }
+
+    private fun stringArrayField(node: JsonNode, field: String): List<String>? {
+        val array = node.get(field)?.takeIf { it.isArray } ?: return null
+        return array.mapNotNull { item ->
+            item.asText().trim().takeIf { it.isNotEmpty() }
+        }.distinct().takeIf { it.isNotEmpty() }
+    }
+
     companion object {
         private const val TAG = "Streamnaro"
         private const val CINEMETA_URL = "https://v3-cinemeta.strem.io"
