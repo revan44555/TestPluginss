@@ -65,4 +65,52 @@ class StreamnaroParsingTest {
             StreamnaroParsing.parseItemRoute("streamnaro://movie/not-an-imdb-id", "streamnaro://")
         )
     }
+
+    @Test
+    fun parsesValidatedInternalEpisodeRoutes() {
+        assertEquals(
+            StreamnaroParsing.EpisodeRoute("tt1234567", 1, 1),
+            StreamnaroParsing.parseEpisodeRoute(
+                "streamnaro://episode/tt1234567/1/1",
+                "streamnaro://"
+            )
+        )
+        assertEquals(
+            StreamnaroParsing.EpisodeRoute("tt1234567", 0, 9),
+            StreamnaroParsing.parseEpisodeRoute(
+                "streamnaro://episode/tt1234567/0/9",
+                "streamnaro://"
+            )
+        )
+        assertNull(
+            StreamnaroParsing.parseEpisodeRoute(
+                "streamnaro://episode/tt1234567/-1/1",
+                "streamnaro://"
+            )
+        )
+        assertNull(
+            StreamnaroParsing.parseEpisodeRoute(
+                "streamnaro://episode/tt1234567/1/0",
+                "streamnaro://"
+            )
+        )
+        assertNull(
+            StreamnaroParsing.parseEpisodeRoute(
+                "streamnaro://episode/not-imdb/1/1",
+                "streamnaro://"
+            )
+        )
+        assertNull(
+            StreamnaroParsing.parseEpisodeRoute(
+                "streamnaro://episode/tt1234567/1/1/extra",
+                "streamnaro://"
+            )
+        )
+        assertNull(
+            StreamnaroParsing.parseEpisodeRoute(
+                "https://example.org/episode/tt1234567/1/1",
+                "streamnaro://"
+            )
+        )
+    }
 }
