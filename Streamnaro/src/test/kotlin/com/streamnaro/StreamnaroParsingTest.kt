@@ -153,4 +153,47 @@ class StreamnaroParsingTest {
             )
         )
     }
+
+    @Test
+    fun mapsMovieRoutesToDocumentedNhdPlayerPages() {
+        assertEquals(
+            "https://nhdapi.st/movie/tt1234567",
+            StreamnaroParsing.playbackPageUrl(
+                "\${routePrefix}movie/tt1234567",
+                routePrefix,
+                "https://nhdapi.st/"
+            )
+        )
+    }
+
+    @Test
+    fun mapsEpisodeRoutesToDocumentedNhdPlayerPages() {
+        assertEquals(
+            "https://nhdapi.st/tv/tt1234567/2/9",
+            StreamnaroParsing.playbackPageUrl(
+                "\${routePrefix}episode/tt1234567/2/9",
+                routePrefix,
+                "https://nhdapi.st/"
+            )
+        )
+    }
+
+    @Test
+    fun rejectsUnsupportedPlaybackRoutes() {
+        assertNull(
+            StreamnaroParsing.playbackPageUrl(
+                "\${routePrefix}series/tt1234567",
+                routePrefix,
+                "https://nhdapi.st"
+            )
+        )
+        assertNull(
+            StreamnaroParsing.playbackPageUrl(
+                "https://not-streamnaro.example/__catalog__/movie/tt1234567",
+                routePrefix,
+                "https://nhdapi.st"
+            )
+        )
+    }
+
 }
