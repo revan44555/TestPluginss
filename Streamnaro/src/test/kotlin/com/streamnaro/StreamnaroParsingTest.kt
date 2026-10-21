@@ -159,7 +159,7 @@ class StreamnaroParsingTest {
         assertEquals(
             "https://nhdapi.st/movie/tt1234567",
             StreamnaroParsing.playbackPageUrl(
-                "\${routePrefix}movie/tt1234567",
+                "${routePrefix}movie/tt1234567",
                 routePrefix,
                 "https://nhdapi.st/"
             )
@@ -171,7 +171,7 @@ class StreamnaroParsingTest {
         assertEquals(
             "https://nhdapi.st/tv/tt1234567/2/9",
             StreamnaroParsing.playbackPageUrl(
-                "\${routePrefix}episode/tt1234567/2/9",
+                "${routePrefix}episode/tt1234567/2/9",
                 routePrefix,
                 "https://nhdapi.st/"
             )
@@ -182,7 +182,7 @@ class StreamnaroParsingTest {
     fun rejectsUnsupportedPlaybackRoutes() {
         assertNull(
             StreamnaroParsing.playbackPageUrl(
-                "\${routePrefix}series/tt1234567",
+                "${routePrefix}series/tt1234567",
                 routePrefix,
                 "https://nhdapi.st"
             )
