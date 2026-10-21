@@ -37,7 +37,6 @@ internal object StreamnaroParsing {
         }.getOrNull()
     }
 
-
     /**
      * Validate an HLS manifest URL before exposing it as a playable link.
      * Only absolute HTTPS URLs with a host and no embedded credentials are accepted.
@@ -49,7 +48,8 @@ internal object StreamnaroParsing {
             val uri = URI(candidate)
             val path = uri.path ?: return@runCatching null
             val isManifestPath = path.endsWith(".m3u8", ignoreCase = true) ||
-                path.endsWith("master.txt", ignoreCase = true)
+                path.equals("master.txt", ignoreCase = true) ||
+                path.endsWith("/master.txt", ignoreCase = true)
             if (
                 uri.scheme.equals("https", ignoreCase = true) &&
                 !uri.host.isNullOrBlank() &&
