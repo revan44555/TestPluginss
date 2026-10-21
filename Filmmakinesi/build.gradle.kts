@@ -1,5 +1,9 @@
 version = 1
 
+android {
+    namespace = "com.filmmakinesi"
+}
+
 cloudstream {
     description = "FilmMakinesi Turkce film sitesi (beta)"
     authors = listOf("revan44555")
