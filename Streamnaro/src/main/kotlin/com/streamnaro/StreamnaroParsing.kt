@@ -18,6 +18,13 @@ internal object StreamnaroParsing {
     fun isImdbId(value: String): Boolean = imdbIdPattern.matches(value)
 
     /**
+     * Use the upstream result count for pagination. Parsed entries can be fewer
+     * than the returned metas when an upstream item has an unsupported ID.
+     */
+    fun hasNextPage(upstreamItemCount: Int, pageSize: Int): Boolean =
+        pageSize > 0 && upstreamItemCount >= pageSize
+
+    /**
      * Only accept absolute HTTPS URLs with a host and without embedded user info.
      * The helper is for display metadata (posters), never playback URLs.
      */
