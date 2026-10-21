@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.network.WebViewResolver
+import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CancellationException
@@ -18,6 +19,13 @@ import java.util.concurrent.CancellationException
  * publicly documented NHD player page and asks CloudStream's WebViewResolver to
  * capture the HLS manifest requested by that player. M3u8Helper expands a
  * master manifest into CloudStream playback-quality links.
+ *
+ * NHD rotates its front domains over time (nhdapi.st, nhdapi.com and
+ * player.nhdapi.com have all served the same embed API), and episode pages
+ * have shipped in both path and query-string forms. Playback therefore builds
+ * an ordered candidate list from [StreamnaroParsing.playbackPageCandidates],
+ * probes it cheaply over plain HTTP, and walks it until a mirror yields a
+ * capturable HLS manifest.
  */
 class StreamnaroProvider : MainAPI() {
     override var mainUrl = "https://streamnaro.online"
@@ -127,6 +135,11 @@ class StreamnaroProvider : MainAPI() {
      * Resolve an item through the NHD player's documented public embed page.
      * The player dynamically requests HLS, so we capture that request instead
      * of hard-coding a short-lived CDN URL from a browser session.
+     *
+     * Candidates come from [StreamnaroParsing.playbackPageCandidates]: every
+     * known NHD front domain, with both documented episode route shapes. They
+     * are tried in probe order until one produces a playable manifest, so a
+     * domain migration degrades playback to a slower start instead of a failure.
      */
     override suspend fun loadLinks(
         data: String,
@@ -134,15 +147,67 @@ class StreamnaroProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val playerPage = StreamnaroParsing.playbackPageUrl(
+        val candidates = StreamnaroParsing.playbackPageCandidates(
             internalRoute = data,
             routePrefix = routePrefix,
-            playerBaseUrl = NHD_PLAYER_URL
-        ) ?: run {
+            playerBaseUrls = NHD_PLAYER_URLS
+        )
+        if (candidates.isEmpty()) {
             Log.w(TAG, "Ignoring unsupported internal playback route.")
             return false
         }
 
+        val orderedCandidates = reorderByProbe(candidates)
+        for (playerPage in orderedCandidates) {
+            if (resolveManifestLinks(playerPage, callback)) {
+                return true
+            }
+        }
+
+        Log.w(TAG, "No playable HLS manifest was captured from any NHD mirror.")
+        return false
+    }
+
+    /**
+     * Split candidates into probe-reachable and probe-unreachable buckets while
+     * preserving the original order inside each bucket. A failed probe does not
+     * disqualify a candidate: NHD fronts its pages with Cloudflare, which may
+     * answer okhttp with a challenge page yet still render in the app's WebView.
+     */
+    private suspend fun reorderByProbe(candidates: List<String>): List<String> {
+        val reachable = mutableListOf<String>()
+        val unreachable = mutableListOf<String>()
+        for (candidate in candidates) {
+            if (probePlayerPage(candidate)) {
+                reachable.add(candidate)
+            } else {
+                unreachable.add(candidate)
+            }
+        }
+        return reachable + unreachable
+    }
+
+    private suspend fun probePlayerPage(url: String): Boolean {
+        return try {
+            val response = app.get(url, headers = probeHeaders)
+            response.code in 200..399
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "NHD mirror probe failed (" + error.javaClass.simpleName + "): " + url)
+            false
+        }
+    }
+
+    /**
+     * Open one candidate player page in the WebView resolver, capture the HLS
+     * manifest request its player makes, and expose every parsed quality as an
+     * extractor link. Returns true only when at least one link was emitted.
+     */
+    private suspend fun resolveManifestLinks(
+        playerPage: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         val manifestPattern = Regex("""(?i)(?:\.m3u8(?:[?#]|$)|(?:^|/)master\.txt(?:[?#]|$))""")
         val resolver = WebViewResolver(
             interceptUrl = manifestPattern,
@@ -152,9 +217,10 @@ class StreamnaroProvider : MainAPI() {
         )
 
         return try {
+            val referer = originOf(playerPage)
             val (capturedRequest, additionalRequests) = resolver.resolveUsingWebView(
                 url = playerPage,
-                referer = "$NHD_PLAYER_URL/"
+                referer = referer
             )
             val requests = (listOfNotNull(capturedRequest) + additionalRequests)
                 .distinctBy { it.url.toString() }
@@ -185,7 +251,7 @@ class StreamnaroProvider : MainAPI() {
                     val links = M3u8Helper.generateM3u8(
                         source = "$name · NHD",
                         streamUrl = streamUrl,
-                        referer = request.header("Referer") ?: playerPage,
+                        referer = request.header("Referer") ?: referer,
                         headers = playbackHeaders,
                         name = "Stream HD"
                     )
@@ -201,16 +267,22 @@ class StreamnaroProvider : MainAPI() {
             }
 
             if (!foundLinks) {
-                Log.w(TAG, "No playable HLS manifest was captured from the player.")
+                Log.w(TAG, "No playable HLS manifest was captured from " + playerPage)
             }
             foundLinks
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            Log.w(TAG, "Playback resolution failed (" + error.javaClass.simpleName + ")")
+            Log.w(TAG, "Playback resolution failed for " + playerPage + " (" + error.javaClass.simpleName + ")")
             false
         }
     }
+
+    private fun originOf(url: String): String =
+        runCatching {
+            val uri = URI(url)
+            uri.scheme + "://" + uri.authority + "/"
+        }.getOrDefault(url)
 
     private suspend fun getJson(url: String): JsonNode? {
         return try {
@@ -328,9 +400,24 @@ class StreamnaroProvider : MainAPI() {
     companion object {
         private const val TAG = "Streamnaro"
         private const val CINEMETA_URL = "https://v3-cinemeta.strem.io"
-        private const val NHD_PLAYER_URL = "https://nhdapi.st"
+        // NHD rotates front domains for the same embed API. Order = preference:
+        // the first entry is the historical primary; later entries are fallbacks
+        // observed in the wild (nhdapi.com, player.nhdapi.com).
+        private val NHD_PLAYER_URLS = listOf(
+            "https://nhdapi.st",
+            "https://nhdapi.com",
+            "https://player.nhdapi.com"
+        )
         private const val PAGE_SIZE = 100
         private const val WEBVIEW_TIMEOUT_MS = 45_000L
+
+        // Browser-like headers for the cheap mirror probe; Cloudflare-fronted
+        // pages are far more likely to answer a real desktop UA with a 2xx.
+        private val probeHeaders = mapOf(
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,*/*;q=0.8",
+            "Accept-Language" to "en-US,en;q=0.9",
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        )
 
         // Injected by WebViewResolver as page resources load. It clicks a visible
         // play control once and requests muted playback as a fallback; CloudStream
