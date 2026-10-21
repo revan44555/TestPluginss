@@ -145,8 +145,12 @@ class StreamnaroProvider : MainAPI() {
 
             var foundLinks = false
             for (request in requests) {
-                val streamUrl = request.url.toString()
-                if (!manifestPattern.containsMatchIn(streamUrl)) continue
+                val capturedUrl = request.url.toString()
+                if (!manifestPattern.containsMatchIn(capturedUrl)) continue
+                val streamUrl = StreamnaroParsing.safeHttpsManifestUrl(capturedUrl) ?: run {
+                    Log.w(TAG, "Ignoring a non-HTTPS or malformed HLS manifest URL.")
+                    continue
+                }
 
                 // Keep only headers commonly required by cross-origin HLS sources.
                 // Do not forward session cookies to playlist segment hosts.
@@ -287,7 +291,7 @@ class StreamnaroProvider : MainAPI() {
         private const val CINEMETA_URL = "https://v3-cinemeta.strem.io"
         private const val NHD_PLAYER_URL = "https://nhdapi.st"
         private const val PAGE_SIZE = 100
-        private const val WEBVIEW_TIMEOUT_MS = 25_000L
+        private const val WEBVIEW_TIMEOUT_MS = 45_000L
 
         // Injected by WebViewResolver as page resources load. It clicks a visible
         // play control once and requests muted playback as a fallback; CloudStream
@@ -299,40 +303,69 @@ class StreamnaroProvider : MainAPI() {
                 let attempts = 0;
                 let playClicked = false;
 
-                const tick = () => {
-                    attempts += 1;
-                    if (!playClicked) {
-                        const controls = Array.from(document.querySelectorAll(
-                            '.vjs-big-play-button, .jw-icon-display, .plyr__control--overlaid, button, [role="button"], a'
-                        ));
-                        const play = controls.find((el) => {
-                            const text = (el.innerText || el.textContent || '').trim();
-                            const aria = el.getAttribute('aria-label') || '';
-                            const cls = typeof el.className === 'string' ? el.className.toLowerCase() : '';
-                            const visible = !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-                            return visible && (/^play( video)?$/i.test(text) || /play/i.test(aria) ||
-                                cls.includes('big-play-button') || cls.includes('play-button') ||
-                                cls.includes('icon-display') || cls.includes('control--overlaid'));
-                        });
-                        if (play) {
-                            playClicked = true;
-                            play.click();
+                const collectAccessibleDocuments = () => {
+                    const documents = [document];
+                    for (let index = 0; index < documents.length && documents.length < 12; index++) {
+                        let frames = [];
+                        try {
+                            frames = Array.from(documents[index].querySelectorAll('iframe'));
+                        } catch (_) {}
+                        for (const frame of frames) {
+                            try {
+                                const nested = frame.contentDocument;
+                                if (nested && !documents.includes(nested)) documents.push(nested);
+                            } catch (_) {
+                                // Cross-origin frames cannot be inspected from the parent page.
+                            }
                         }
                     }
+                    return documents;
+                };
 
-                    const video = document.querySelector('video');
-                    if (video && video.paused) {
-                        video.muted = true;
-                        const result = video.play();
-                        if (result && result.catch) result.catch(() => {});
+                const tick = () => {
+                    attempts += 1;
+                    const documents = collectAccessibleDocuments();
+
+                    for (const doc of documents) {
+                        if (!playClicked) {
+                            let controls = [];
+                            try {
+                                controls = Array.from(doc.querySelectorAll(
+                                    '.vjs-big-play-button, .jw-icon-display, .plyr__control--overlaid, button, [role="button"], a'
+                                ));
+                            } catch (_) {}
+
+                            const play = controls.find((el) => {
+                                const text = (el.innerText || el.textContent || '').trim();
+                                const aria = el.getAttribute('aria-label') || '';
+                                const cls = typeof el.className === 'string' ? el.className.toLowerCase() : '';
+                                const visible = !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+                                return visible && (/^play( video)?$/i.test(text) || /play/i.test(aria) ||
+                                    cls.includes('big-play-button') || cls.includes('play-button') ||
+                                    cls.includes('icon-display') || cls.includes('control--overlaid'));
+                            });
+
+                            if (play) {
+                                playClicked = true;
+                                try { play.click(); } catch (_) {}
+                            }
+                        }
+
+                        try {
+                            const video = doc.querySelector('video');
+                            if (video && video.paused) {
+                                video.muted = true;
+                                const result = video.play();
+                                if (result && result.catch) result.catch(() => {});
+                            }
+                        } catch (_) {}
                     }
 
-                    if (attempts >= 30) clearInterval(timer);
+                    if (attempts >= 90) clearInterval(timer);
                 };
 
                 const timer = setInterval(tick, 400);
                 tick();
             })();
-        """
-    }
+        """    }
 }
