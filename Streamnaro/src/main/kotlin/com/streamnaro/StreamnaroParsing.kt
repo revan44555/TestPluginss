@@ -70,7 +70,8 @@ internal object StreamnaroParsing {
 
     /**
      * Parse the internal route stored on an episode. This route is not a media
-     * URL: it identifies metadata coordinates for a future authorized resolver.
+     * URL: it identifies the IMDb ID and episode coordinates used to build the
+     * documented player page when playback is requested.
      */
     fun parseEpisodeRoute(url: String, routePrefix: String): EpisodeRoute? {
         if (!url.startsWith(routePrefix)) return null
