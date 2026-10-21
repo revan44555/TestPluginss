@@ -5,17 +5,19 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.M3u8Helper
+import com.lagradost.cloudstream3.network.WebViewResolver
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CancellationException
 
 /**
- * Metadata/catalog prototype for Streamnaro.
+ * Streamnaro catalog provider.
  *
- * Streamnaro's public page mentions Cinemeta catalog feeds, but this review did
- * not find a documented, verifiable playback API. Search and metadata therefore
- * use Cinemeta's documented public metadata interface. Playback intentionally
- * fails closed until an authorized and documented media endpoint is available.
+ * Cinemeta supplies catalog metadata. For playback, this provider opens the
+ * publicly documented NHD player page and asks CloudStream's WebViewResolver to
+ * capture the HLS manifest requested by that player. M3u8Helper expands a
+ * master manifest into CloudStream playback-quality links.
  */
 class StreamnaroProvider : MainAPI() {
     override var mainUrl = "https://streamnaro.online"
@@ -106,9 +108,9 @@ class StreamnaroProvider : MainAPI() {
     }
 
     /**
-     * The site's browser-visible UI yielded HLS playlist requests, but not a
-     * verified, documented, authorized resolver contract. Validate our own item
-     * and episode routes before failing closed; never emit a captured browser URL.
+     * Resolve an item through the NHD player's documented public embed page.
+     * The player dynamically requests HLS, so we capture that request instead
+     * of hard-coding a short-lived CDN URL from a browser session.
      */
     override suspend fun loadLinks(
         data: String,
@@ -116,17 +118,77 @@ class StreamnaroProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val itemRoute = parseItemRoute(data)
-        val episodeRoute = StreamnaroParsing.parseEpisodeRoute(data, routePrefix)
-
-        if (itemRoute == null && episodeRoute == null) {
+        val playerPage = StreamnaroParsing.playbackPageUrl(
+            internalRoute = data,
+            routePrefix = routePrefix,
+            playerBaseUrl = NHD_PLAYER_URL
+        ) ?: run {
             Log.w(TAG, "Ignoring unsupported internal playback route.")
             return false
         }
 
-        val routeKind = if (episodeRoute != null) "episode" else itemRoute!!.first
-        Log.w(TAG, "Playback is not configured for $routeKind routes: no verified authorized playback API.")
-        return false
+        val manifestPattern = Regex("""(?i)(?:\.m3u8(?:[?#]|$)|master\.txt(?:[?#]|$))""")
+        val resolver = WebViewResolver(
+            interceptUrl = manifestPattern,
+            useOkhttp = false,
+            script = AUTO_PLAY_SCRIPT,
+            timeout = WEBVIEW_TIMEOUT_MS
+        )
+
+        return try {
+            val (capturedRequest, additionalRequests) = resolver.resolveUsingWebView(
+                url = playerPage,
+                referer = "$NHD_PLAYER_URL/"
+            )
+            val requests = (listOfNotNull(capturedRequest) + additionalRequests)
+                .distinctBy { it.url.toString() }
+
+            var foundLinks = false
+            for (request in requests) {
+                val streamUrl = request.url.toString()
+                if (!manifestPattern.containsMatchIn(streamUrl)) continue
+
+                // Keep only headers commonly required by cross-origin HLS sources.
+                // Do not forward session cookies to playlist segment hosts.
+                val playbackHeaders = listOf(
+                    "Origin",
+                    "Referer",
+                    "User-Agent",
+                    "Accept",
+                    "Accept-Language"
+                ).mapNotNull { headerName ->
+                    request.header(headerName)?.let { headerName to it }
+                }.toMap()
+
+                try {
+                    val links = M3u8Helper.generateM3u8(
+                        source = "$name · NHD",
+                        streamUrl = streamUrl,
+                        referer = request.header("Referer") ?: playerPage,
+                        headers = playbackHeaders,
+                        name = "Stream HD"
+                    )
+                    links.forEach { link ->
+                        callback(link)
+                        foundLinks = true
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    Log.w(TAG, "Could not parse captured HLS manifest (" + error.javaClass.simpleName + ")")
+                }
+            }
+
+            if (!foundLinks) {
+                Log.w(TAG, "No playable HLS manifest was captured from the player.")
+            }
+            foundLinks
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "Playback resolution failed (" + error.javaClass.simpleName + ")")
+            false
+        }
     }
 
     private suspend fun getJson(url: String): JsonNode? {
@@ -223,6 +285,55 @@ class StreamnaroProvider : MainAPI() {
     companion object {
         private const val TAG = "Streamnaro"
         private const val CINEMETA_URL = "https://v3-cinemeta.strem.io"
+        private const val NHD_PLAYER_URL = "https://nhdapi.st"
         private const val PAGE_SIZE = 100
+        private const val WEBVIEW_TIMEOUT_MS = 25_000L
+
+        // Injected by WebViewResolver as page resources load. It clicks a visible
+        // play control once and requests muted playback as a fallback; CloudStream
+        // itself plays the captured HLS link.
+        private const val AUTO_PLAY_SCRIPT = """
+            (() => {
+                if (window.__streamnaroAutoPlayInstalled) return;
+                window.__streamnaroAutoPlayInstalled = true;
+                let attempts = 0;
+                let playClicked = false;
+
+                const tick = () => {
+                    attempts += 1;
+                    if (!playClicked) {
+                        const controls = Array.from(document.querySelectorAll(
+                            '.vjs-big-play-button, .jw-icon-display, .plyr__control--overlaid, ' +
+                            'button[aria-label*="play" i], [role="button"][aria-label*="play" i], button'
+                        ));
+                        const play = controls.find((el) => {
+                            const text = (el.innerText || el.textContent || '').trim();
+                            const aria = el.getAttribute('aria-label') || '';
+                            const visible = !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+                            return visible && (/^play( video)?$/i.test(text) || /play/i.test(aria) ||
+                                el.classList.contains('vjs-big-play-button') ||
+                                el.classList.contains('jw-icon-display') ||
+                                el.classList.contains('plyr__control--overlaid'));
+                        });
+                        if (play) {
+                            playClicked = true;
+                            play.click();
+                        }
+                    }
+
+                    const video = document.querySelector('video');
+                    if (video && video.paused) {
+                        video.muted = true;
+                        const result = video.play();
+                        if (result && result.catch) result.catch(() => {});
+                    }
+
+                    if (attempts >= 30) clearInterval(timer);
+                };
+
+                const timer = setInterval(tick, 400);
+                tick();
+            })();
+        """
     }
 }
