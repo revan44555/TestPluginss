@@ -147,7 +147,8 @@ class StreamnaroProvider : MainAPI() {
             for (request in requests) {
                 val capturedUrl = request.url.toString()
                 if (!manifestPattern.containsMatchIn(capturedUrl)) continue
-                val streamUrl = StreamnaroParsing.safeHttpsManifestUrl(capturedUrl) ?: run {
+                val streamUrl = StreamnaroParsing.safeHttpsManifestUrl(capturedUrl)
+                if (streamUrl == null) {
                     Log.w(TAG, "Ignoring a non-HTTPS or malformed HLS manifest URL.")
                     continue
                 }
@@ -367,5 +368,6 @@ class StreamnaroProvider : MainAPI() {
                 const timer = setInterval(tick, 400);
                 tick();
             })();
-        """    }
+        """
+    }
 }
