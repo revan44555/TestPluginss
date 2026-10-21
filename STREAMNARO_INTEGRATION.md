@@ -14,13 +14,30 @@ not proof that every user session fails.
 The page labels include “Stream HD NHD API”, “2Embed Backup Server”, and three
 download-server options. Its settings text describes a “Direct High Speed
 Server” with route shapes `/movie/{IMDB_ID}` and `/tv/{IMDB_ID}/{S}/{E}`.
-These labels and route shapes do not identify a verified API base URL or establish
-request parameters, authentication, response schema, content authorization, or
-a stable media response. A label or route template alone is insufficient
-evidence that a service is a working API or that its streams are authorized.
 
-The page also includes generic-looking UI text and a placeholder-like support
-number. Those are reliability warning signs, not proof of malicious intent.
+There is a public, separate NHD Embed documentation page:
+https://nhdapi.com/docs. It documents player/embed URLs
+`https://nhdapi.com/movie/{tmdbId/imdbId}` and
+`https://nhdapi.com/tv/{tmdbId/imdbId}/{season}/{episode}`, which match the
+route *shape* shown by Streamnaro. Streamnaro's page and a third-party domain
+inventory also mention `nhdapi.com`, so this is a plausible source candidate.
+It is not proof that the user's selected player request came from that service:
+the user-provided Network capture shows `nextlevelbrandstudio.site` as the
+request host and `https://nextgencloudfabric.com` as its Origin.
+
+NHD Embed's public docs describe an iframe/embed player and direct-download
+pages. They say a key is required for its JSON API, but the public documentation
+reviewed here does not specify a stable JSON resolver response containing raw
+HLS URLs. An iframe URL is not a direct media URL and must not be passed to
+CloudStream's media player as if it were an `.m3u8` stream. Do not invent an API
+endpoint or scrape an undocumented response to get around this distinction.
+
+A label or route template alone is insufficient evidence that a service is a
+working API or that its streams are authorized.
+
+The public page also includes generic-looking UI text, loading errors, and a
+placeholder-like support number. Those are reliability warning signs, not
+proof of malicious intent.
 
 ## Public domain-reputation warnings
 
@@ -40,8 +57,8 @@ for both the site and one host visible in the user's Network capture:
 
 These scores are automated reputation assessments, not definitive proof of
 malware or fraud. They are nevertheless relevant risk signals. Do not send site
-credentials, install unknown APKs, hard-code session URLs, or trust this host as
-a plugin dependency solely because a browser request returned HTTP 200.
+credentials, install unknown APKs, hard-code session URLs, or trust a host as a
+plugin dependency solely because a browser request returned HTTP 200.
 
 ## Browser Network capture (user-provided, 2026-10-21)
 
@@ -78,9 +95,9 @@ an API contract from this observation.
   routes, episode coordinates, and episode playback-route validation.
 - A pull-request build workflow that compiles without publishing artifacts.
 
-During the code review, pagination was found to append `skip` as a query
-parameter after the `.json` suffix. Stremio's documented protocol represents
-catalog extra arguments in the path before `.json`, e.g.
+During code review, pagination was found to append `skip` as a query parameter
+after the `.json` suffix. Stremio's documented protocol represents catalog
+extra arguments in the path before `.json`, e.g.
 `/catalog/movie/top/skip=100.json`. The provider now uses that route shape and
 has a unit test for first and subsequent pages.
 
@@ -107,9 +124,9 @@ content that the integrator is authorized to access.
 ## Limitations
 
 The site is client-rendered and the public page output did not expose a stable
-catalog or playback endpoint during this review. The browser capture narrows
-the technical observation to HLS playlist requests, but does not resolve the
-authorization or integration-contract questions. This implementation has not
-been installed or tested in a real CloudStream Android app during this review.
-GitHub Actions validates the automated unit tests and plugin build, not runtime
-playback against Streamnaro.
+catalog or playback endpoint. The browser capture narrows the observation to
+HLS playlist requests and the public NHD Embed docs give a plausible embed
+candidate, but the actual selected server, raw-media resolution flow, and rights
+model remain unverified. This implementation has not been installed or tested
+in a real CloudStream Android app during this review. GitHub Actions validates
+automated unit tests and plugin build, not runtime playback against Streamnaro.
