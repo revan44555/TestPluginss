@@ -14,5 +14,10 @@ cloudstream {
 }
 
 dependencies {
+    // Compile-only: the CloudStream app already ships kotlinx-coroutines at
+    // runtime (visible in device log stack traces), but the plugin compile
+    // classpath does not expose it. compileOnly lets the code build without
+    // bundling a second copy into the plugin package.
+    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     testImplementation("junit:junit:4.13.2")
 }
