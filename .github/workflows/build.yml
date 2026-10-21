@@ -29,8 +29,15 @@ jobs:
           ref: builds
           path: builds
 
-      - name: Clean old builds
+      - name: Preserve Ninjago release and clean old builds
         run: |
+          # NinjagoIzlesene is intentionally frozen. Save its published binary and
+          # repository metadata before rebuilding the other plugins.
+          preserve_dir="$RUNNER_TEMP/ninjago-preserve"
+          mkdir -p "$preserve_dir"
+          cp "$GITHUB_WORKSPACE/builds/NinjagoIzlesene.cs3" "$preserve_dir/NinjagoIzlesene.cs3"
+          cp "$GITHUB_WORKSPACE/builds/plugins.json" "$preserve_dir/plugins.json"
+
           rm -f "$GITHUB_WORKSPACE"/builds/*.cs3
           rm -f "$GITHUB_WORKSPACE"/builds/plugins.json
 
@@ -54,10 +61,47 @@ jobs:
         run: |
           gradle make makePluginsJson --stacktrace
 
-      - name: Copy builds
+      - name: Copy builds and keep Ninjago unchanged
         run: |
           cp src/**/build/*.cs3 "$GITHUB_WORKSPACE/builds/"
           cp src/build/plugins.json "$GITHUB_WORKSPACE/builds/"
+
+          # Restore the exact published Ninjago package bytes rather than
+          # publishing a freshly rebuilt binary for the frozen plugin.
+          preserve_dir="$RUNNER_TEMP/ninjago-preserve"
+          cp "$preserve_dir/NinjagoIzlesene.cs3" "$GITHUB_WORKSPACE/builds/NinjagoIzlesene.cs3"
+
+          # Keep the existing Ninjago registry entry in sync with those exact bytes.
+          python3 - "$preserve_dir/plugins.json" "$GITHUB_WORKSPACE/builds/plugins.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as file:
+              original = json.load(file)
+          with open(sys.argv[2], "r", encoding="utf-8") as file:
+              rebuilt = json.load(file)
+
+          original_ninjago = next(
+              (entry for entry in original if entry.get("internalName") == "NinjagoIzlesene"),
+              None,
+          )
+          if original_ninjago is None:
+              raise SystemExit("Refusing to publish: previous NinjagoIzlesene registry entry is missing")
+
+          found = False
+          for index, entry in enumerate(rebuilt):
+              if entry.get("internalName") == "NinjagoIzlesene":
+                  rebuilt[index] = original_ninjago
+                  found = True
+                  break
+
+          if not found:
+              raise SystemExit("Refusing to publish: rebuilt registry has no NinjagoIzlesene entry")
+
+          with open(sys.argv[2], "w", encoding="utf-8") as file:
+              json.dump(rebuilt, file, ensure_ascii=False, indent=4)
+              file.write("\n")
+          PY
 
       - name: Push builds
         working-directory: builds

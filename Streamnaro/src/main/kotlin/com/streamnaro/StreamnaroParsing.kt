@@ -18,6 +18,12 @@ internal object StreamnaroParsing {
     fun isImdbId(value: String): Boolean = imdbIdPattern.matches(value)
 
     /**
+     * Pagination must use the upstream metas count, before invalid IDs are filtered.
+     */
+    fun hasNextPage(upstreamItemCount: Int, pageSize: Int): Boolean =
+        pageSize > 0 && upstreamItemCount >= pageSize
+
+    /**
      * Only accept absolute HTTPS URLs with a host and without embedded user info.
      * The helper is for display metadata (posters), never playback URLs.
      */
@@ -29,6 +35,32 @@ internal object StreamnaroParsing {
                 uri.scheme.equals("https", ignoreCase = true) &&
                 !uri.host.isNullOrBlank() &&
                 uri.userInfo == null
+            ) {
+                candidate
+            } else {
+                null
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Validate an HLS manifest URL before exposing it as a playable link.
+     * Only absolute HTTPS URLs with a host and no embedded credentials are accepted.
+     * A manifest suffix must appear in the URL path, not merely in its query string.
+     */
+    fun safeHttpsManifestUrl(value: String?): String? {
+        val candidate = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return runCatching {
+            val uri = URI(candidate)
+            val path = uri.path ?: return@runCatching null
+            val isManifestPath = path.endsWith(".m3u8", ignoreCase = true) ||
+                path.equals("master.txt", ignoreCase = true) ||
+                path.endsWith("/master.txt", ignoreCase = true)
+            if (
+                uri.scheme.equals("https", ignoreCase = true) &&
+                !uri.host.isNullOrBlank() &&
+                uri.userInfo == null &&
+                isManifestPath
             ) {
                 candidate
             } else {

@@ -33,6 +33,25 @@ class StreamnaroParsingTest {
     }
 
     @Test
+    fun acceptsOnlySecureHlsManifestUrls() {
+        assertEquals(
+            "https://cdn.example.org/hls/master.m3u8?token=abc",
+            StreamnaroParsing.safeHttpsManifestUrl("https://cdn.example.org/hls/master.m3u8?token=abc")
+        )
+        assertEquals(
+            "https://cdn.example.org/master.txt",
+            StreamnaroParsing.safeHttpsManifestUrl("https://cdn.example.org/master.txt")
+        )
+        assertNull(StreamnaroParsing.safeHttpsManifestUrl(null))
+        assertNull(StreamnaroParsing.safeHttpsManifestUrl("http://cdn.example.org/master.m3u8"))
+        assertNull(StreamnaroParsing.safeHttpsManifestUrl("https://user:password@cdn.example.org/master.m3u8"))
+        assertNull(StreamnaroParsing.safeHttpsManifestUrl("https://cdn.example.org/video.mp4"))
+        assertNull(StreamnaroParsing.safeHttpsManifestUrl("https://cdn.example.org/video.mp4?next=.m3u8"))
+        assertNull(StreamnaroParsing.safeHttpsManifestUrl("https://cdn.example.org/notmaster.txt"))
+        assertNull(StreamnaroParsing.safeHttpsManifestUrl("file:///tmp/master.m3u8"))
+    }
+
+    @Test
     fun buildsCinemetaCatalogPaginationPaths() {
         assertEquals(
             "https://v3-cinemeta.strem.io/catalog/movie/top.json",
@@ -196,4 +215,11 @@ class StreamnaroParsingTest {
         )
     }
 
+
+    @Test
+    fun validatesPaginationBoundary() {
+        assertTrue(StreamnaroParsing.hasNextPage(100, 100))
+        assertFalse(StreamnaroParsing.hasNextPage(99, 100))
+        assertFalse(StreamnaroParsing.hasNextPage(100, 0))
+    }
 }

@@ -21,16 +21,21 @@ import java.util.concurrent.CancellationException
  */
 class StreamnaroProvider : MainAPI() {
     override var mainUrl = "https://streamnaro.online"
-    override var name = "Streamnaro Catalog"
+    override var name = "Streamnaro"
     override var lang = "en"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+    override val providerType = ProviderType.MetaProvider
+    // Playback resolution depends on a WebView to run the documented player page.
+    override val usesWebView = true
+    // Captured HLS sources may require headers that are not portable to Cast devices.
+    override val hasChromecastSupport = false
     // No verified playable links exist yet, so download support would be misleading.
     override val hasDownloadSupport = false
 
     override val mainPage = mainPageOf(
-        "$CINEMETA_URL/catalog/movie/top.json" to "Movies",
-        "$CINEMETA_URL/catalog/series/top.json" to "TV Series"
+        "$CINEMETA_URL/catalog/movie/top.json" to "Popular Movies",
+        "$CINEMETA_URL/catalog/series/top.json" to "Popular TV Series"
     )
 
     // CloudStream resolves providers for saved items by matching URLs against mainUrl.
@@ -53,11 +58,16 @@ class StreamnaroProvider : MainAPI() {
         val skip = ((page.coerceAtLeast(1) - 1) * PAGE_SIZE)
         val pageUrl = StreamnaroParsing.catalogPageUrl(catalogBaseUrl, skip)
         val response = getJson(pageUrl)
+        val upstreamItemCount = response
+            ?.get("metas")
+            ?.takeIf { it.isArray }
+            ?.size()
+            ?: 0
         val items = parseSearchResponses(response, mediaType)
         return newHomePageResponse(
             request.name,
             items,
-            hasNext = items.size >= PAGE_SIZE
+            hasNext = StreamnaroParsing.hasNextPage(upstreamItemCount, PAGE_SIZE)
         )
     }
 
@@ -66,14 +76,12 @@ class StreamnaroProvider : MainAPI() {
         if (trimmed.isEmpty()) return emptyList()
 
         val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name()).replace("+", "%20")
-        val movieResults = parseSearchResponses(
-            getJson("$CINEMETA_URL/catalog/movie/top/search=$encoded.json"),
-            "movie"
-        )
-        val seriesResults = parseSearchResponses(
-            getJson("$CINEMETA_URL/catalog/series/top/search=$encoded.json"),
-            "series"
-        )
+        // Use the provider's existing HTTP client; avoid relying on extra coroutine
+        // artifacts that are not present in the plugin's compile classpath.
+        val movieResponse = getJson("$CINEMETA_URL/catalog/movie/top/search=$encoded.json")
+        val seriesResponse = getJson("$CINEMETA_URL/catalog/series/top/search=$encoded.json")
+        val movieResults = parseSearchResponses(movieResponse, "movie")
+        val seriesResults = parseSearchResponses(seriesResponse, "series")
 
         return (movieResults + seriesResults).distinctBy { it.url }
     }
@@ -96,13 +104,21 @@ class StreamnaroProvider : MainAPI() {
         return if (route.first == "movie") {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = safeHttpsUrl(textField(meta, "background"))
                 this.plot = description
+                this.year = yearField(meta)
+                this.score = scoreField(meta)
+                this.tags = stringArrayField(meta, "genres")
             }
         } else {
             val episodes = parseEpisodes(meta, route.second)
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = safeHttpsUrl(textField(meta, "background"))
                 this.plot = description
+                this.year = yearField(meta)
+                this.score = scoreField(meta)
+                this.tags = stringArrayField(meta, "genres")
             }
         }
     }
@@ -127,7 +143,7 @@ class StreamnaroProvider : MainAPI() {
             return false
         }
 
-        val manifestPattern = Regex("""(?i)(?:\.m3u8(?:[?#]|$)|master\.txt(?:[?#]|$))""")
+        val manifestPattern = Regex("""(?i)(?:\.m3u8(?:[?#]|$)|(?:^|/)master\.txt(?:[?#]|$))""")
         val resolver = WebViewResolver(
             interceptUrl = manifestPattern,
             useOkhttp = false,
@@ -145,8 +161,13 @@ class StreamnaroProvider : MainAPI() {
 
             var foundLinks = false
             for (request in requests) {
-                val streamUrl = request.url.toString()
-                if (!manifestPattern.containsMatchIn(streamUrl)) continue
+                val capturedUrl = request.url.toString()
+                if (!manifestPattern.containsMatchIn(capturedUrl)) continue
+                val streamUrl = StreamnaroParsing.safeHttpsManifestUrl(capturedUrl)
+                if (streamUrl == null) {
+                    Log.w(TAG, "Ignoring a non-HTTPS or malformed HLS manifest URL.")
+                    continue
+                }
 
                 // Keep only headers commonly required by cross-origin HLS sources.
                 // Do not forward session cookies to playlist segment hosts.
@@ -214,10 +235,10 @@ class StreamnaroProvider : MainAPI() {
     ): List<SearchResponse> {
         val metas = json?.get("metas")?.takeIf { it.isArray } ?: return emptyList()
         return metas.mapNotNull { meta ->
-            val id = textField(meta, "imdb_id")
-                ?: textField(meta, "id")
-                ?: return@mapNotNull null
-            if (!StreamnaroParsing.isImdbId(id)) return@mapNotNull null
+            val id = listOfNotNull(
+                textField(meta, "imdb_id"),
+                textField(meta, "id")
+            ).firstOrNull(StreamnaroParsing::isImdbId) ?: return@mapNotNull null
 
             val title = textField(meta, "name") ?: return@mapNotNull null
             val poster = safeHttpsUrl(textField(meta, "poster"))
@@ -226,9 +247,13 @@ class StreamnaroProvider : MainAPI() {
             when (mediaType) {
                 "movie" -> newMovieSearchResponse(title, route, TvType.Movie) {
                     this.posterUrl = poster
+                    this.year = yearField(meta)
+                    this.score = scoreField(meta)
                 }
                 "series" -> newTvSeriesSearchResponse(title, route, TvType.TvSeries) {
                     this.posterUrl = poster
+                    this.year = yearField(meta)
+                    this.score = scoreField(meta)
                 }
                 else -> null
             }
@@ -282,12 +307,30 @@ class StreamnaroProvider : MainAPI() {
     private fun safeHttpsUrl(value: String?): String? =
         StreamnaroParsing.safeHttpsUrl(value)
 
+    private fun yearField(node: JsonNode): Int? =
+        intField(node, "year")
+            ?: textField(node, "year")?.take(4)?.toIntOrNull()
+            ?: textField(node, "releaseInfo")?.take(4)?.toIntOrNull()
+
+    private fun scoreField(node: JsonNode): Score? {
+        val rating = textField(node, "imdbRating")?.toFloatOrNull() ?: return null
+        if (!rating.isFinite() || rating !in 0f..10f) return null
+        return Score.from10(rating)
+    }
+
+    private fun stringArrayField(node: JsonNode, field: String): List<String>? {
+        val array = node.get(field)?.takeIf { it.isArray } ?: return null
+        return array.mapNotNull { item ->
+            item.asText().trim().takeIf { it.isNotEmpty() }
+        }.distinct().takeIf { it.isNotEmpty() }
+    }
+
     companion object {
         private const val TAG = "Streamnaro"
         private const val CINEMETA_URL = "https://v3-cinemeta.strem.io"
         private const val NHD_PLAYER_URL = "https://nhdapi.st"
         private const val PAGE_SIZE = 100
-        private const val WEBVIEW_TIMEOUT_MS = 25_000L
+        private const val WEBVIEW_TIMEOUT_MS = 45_000L
 
         // Injected by WebViewResolver as page resources load. It clicks a visible
         // play control once and requests muted playback as a fallback; CloudStream
@@ -299,35 +342,65 @@ class StreamnaroProvider : MainAPI() {
                 let attempts = 0;
                 let playClicked = false;
 
-                const tick = () => {
-                    attempts += 1;
-                    if (!playClicked) {
-                        const controls = Array.from(document.querySelectorAll(
-                            '.vjs-big-play-button, .jw-icon-display, .plyr__control--overlaid, button, [role="button"], a'
-                        ));
-                        const play = controls.find((el) => {
-                            const text = (el.innerText || el.textContent || '').trim();
-                            const aria = el.getAttribute('aria-label') || '';
-                            const cls = typeof el.className === 'string' ? el.className.toLowerCase() : '';
-                            const visible = !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-                            return visible && (/^play( video)?$/i.test(text) || /play/i.test(aria) ||
-                                cls.includes('big-play-button') || cls.includes('play-button') ||
-                                cls.includes('icon-display') || cls.includes('control--overlaid'));
-                        });
-                        if (play) {
-                            playClicked = true;
-                            play.click();
+                const collectAccessibleDocuments = () => {
+                    const documents = [document];
+                    for (let index = 0; index < documents.length && documents.length < 12; index++) {
+                        let frames = [];
+                        try {
+                            frames = Array.from(documents[index].querySelectorAll('iframe'));
+                        } catch (_) {}
+                        for (const frame of frames) {
+                            try {
+                                const nested = frame.contentDocument;
+                                if (nested && !documents.includes(nested)) documents.push(nested);
+                            } catch (_) {
+                                // Cross-origin frames cannot be inspected from the parent page.
+                            }
                         }
                     }
+                    return documents;
+                };
 
-                    const video = document.querySelector('video');
-                    if (video && video.paused) {
-                        video.muted = true;
-                        const result = video.play();
-                        if (result && result.catch) result.catch(() => {});
+                const tick = () => {
+                    attempts += 1;
+                    const documents = collectAccessibleDocuments();
+
+                    for (const doc of documents) {
+                        if (!playClicked) {
+                            let controls = [];
+                            try {
+                                controls = Array.from(doc.querySelectorAll(
+                                    '.vjs-big-play-button, .jw-icon-display, .plyr__control--overlaid, button, [role="button"], a'
+                                ));
+                            } catch (_) {}
+
+                            const play = controls.find((el) => {
+                                const text = (el.innerText || el.textContent || '').trim();
+                                const aria = el.getAttribute('aria-label') || '';
+                                const cls = typeof el.className === 'string' ? el.className.toLowerCase() : '';
+                                const visible = !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+                                return visible && (/^play( video)?$/i.test(text) || /play/i.test(aria) ||
+                                    cls.includes('big-play-button') || cls.includes('play-button') ||
+                                    cls.includes('icon-display') || cls.includes('control--overlaid'));
+                            });
+
+                            if (play) {
+                                playClicked = true;
+                                try { play.click(); } catch (_) {}
+                            }
+                        }
+
+                        try {
+                            const video = doc.querySelector('video');
+                            if (video && video.paused) {
+                                video.muted = true;
+                                const result = video.play();
+                                if (result && result.catch) result.catch(() => {});
+                            }
+                        } catch (_) {}
                     }
 
-                    if (attempts >= 30) clearInterval(timer);
+                    if (attempts >= 90) clearInterval(timer);
                 };
 
                 const timer = setInterval(tick, 400);
