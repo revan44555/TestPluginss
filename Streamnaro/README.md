@@ -14,17 +14,23 @@ this repository.
 
 ## Playback status
 
-Playback is intentionally **not implemented**. Streamnaro's public UI mentions
-Cinemeta catalog feeds and several server labels, but this review did not verify
-an official, documented playback endpoint, stream format, or authorization
-model. The visible labels are not enough to establish where video bytes originate.
-The provider therefore returns no playback link rather than guessing endpoints
-or treating arbitrary page URLs as media files.
+Playback is intentionally **not implemented**. A user-provided Android DevTools
+capture showed four HTTP 200 `.m3u8` media requests while a title page was open.
+One request came from `nextlevelbrandstudio.site`; the request showed
+`https://nextgencloudfabric.com` as its Origin and a response MIME type of
+`application/vnd.apple.mpegurl`. The response shown was only 76 bytes.
+
+This confirms an HLS playlist-like request occurred in that browser session; it
+does not verify a stable Streamnaro playback API, the full HLS segment chain, or
+the rights to re-use the stream. The long captured URL is not stored because it
+may include session-specific access material and is not a stable integration
+contract.
 
 To implement playback, first obtain and verify the site's official API
 documentation or an authorized integration contract. Then add a dedicated
 resolver for that documented API and test it with content the integrator is
-authorized to access.
+authorized to access. Do not hard-code temporary browser URLs or infer endpoint
+behavior from a request label alone.
 
 ## Validation still required
 
