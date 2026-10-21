@@ -114,7 +114,11 @@ class StreamnaroProvider : MainAPI() {
             val episodes = parseEpisodes(meta, route.second)
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = safeHttpsUrl(textField(meta, "background"))
                 this.plot = description
+                this.year = yearField(meta)
+                this.score = scoreField(meta)
+                this.tags = stringArrayField(meta, "genres")
             }
         }
     }
