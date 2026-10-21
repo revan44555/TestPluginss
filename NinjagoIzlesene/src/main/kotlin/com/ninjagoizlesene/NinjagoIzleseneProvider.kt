@@ -170,6 +170,31 @@ class NinjagoIzleseneProvider : MainAPI() {
     private val archiveUrl = "$mainUrl/dizi-arsivi/"
 
     // ---------------------------------------------------------------
+    // Arşiv önbelleği
+    // ---------------------------------------------------------------
+    // Site tek sabit bir arşiv sayfasından ibaret olduğu için hem ana sayfa
+    // hem arama için 10 dakikalık basit bir bellek önbelleği tutuyoruz;
+    // her anahtar kelimede sayfayı yeniden indirmek gereksiz ağ trafiği
+    // ve açılma gecikmesi yaratıyordu.
+    private val archiveCacheTtlMs = 10 * 60 * 1000L
+    private var archiveCacheTimeMs = 0L
+    private var archiveCacheItems: List<Pair<String, Element>> = emptyList()
+
+    private suspend fun getArchiveItems(): List<Pair<String, Element>> {
+        val now = System.currentTimeMillis()
+        if (archiveCacheItems.isNotEmpty() &&
+            now - archiveCacheTimeMs < archiveCacheTtlMs
+        ) {
+            return archiveCacheItems
+        }
+        val doc = app.get(archiveUrl, headers = headers).document
+        val items = collectSeriesLinks(doc)
+        archiveCacheItems = items
+        archiveCacheTimeMs = now
+        return items
+    }
+
+    // ---------------------------------------------------------------
     // Ortak yardımcılar
     // ---------------------------------------------------------------
     private fun fixUrl(url: String): String {
@@ -278,8 +303,7 @@ class NinjagoIzleseneProvider : MainAPI() {
     // Ana sayfa
     // ---------------------------------------------------------------
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data, headers = headers).document
-        val seriesLinks = collectSeriesLinks(doc)
+        val seriesLinks = getArchiveItems()
         val items = seriesLinks.map { (href, link) -> toSearchResponse(href, link) }
         return newHomePageResponse(request.name, items, hasNext = false)
     }
@@ -288,16 +312,10 @@ class NinjagoIzleseneProvider : MainAPI() {
     // Arama
     // ---------------------------------------------------------------
     override suspend fun search(query: String): List<SearchResponse> {
-        val response = app.get(archiveUrl, headers = headers)
-        val doc = response.document
-        val seriesLinks = collectSeriesLinks(doc)
-        val totalLinks = doc.select("a[href]").size
+        val seriesLinks = getArchiveItems()
         Log.d(
             "NinjagoIzlesene",
-            "search('$query') diagnostic: httpCode=${response.code} " +
-                "totalLinks=$totalLinks diziLinks=${seriesLinks.size} " +
-                "bodyLen=${response.text.length} " +
-                "bodyStart=${response.text.take(200).replace("\n", " ")}"
+            "search('$query'): arşivden ${seriesLinks.size} öğe taranıyor"
         )
         if (query.isBlank()) {
             return seriesLinks.map { (href, link) -> toSearchResponse(href, link) }
@@ -312,10 +330,12 @@ class NinjagoIzleseneProvider : MainAPI() {
     }
 
     private fun normalizeTr(text: String): String {
+        // Not: "İ".lowercase() birleşik noktalı "i̇" üretir; bu yüzden
+        // Türkçe karakter dönüşümleri lowercase'den ÖNCE yapılmalı.
         return text
-            .lowercase()
+            .replace("İ", "I")
             .replace("ı", "i")
-            .replace("İ", "i")
+            .lowercase()
             .trim()
     }
 
@@ -370,6 +390,10 @@ class NinjagoIzleseneProvider : MainAPI() {
     private fun extractEpisodes(doc: Document, pageUrl: String, slug: String): List<Episode> {
         val episodes = mutableListOf<Episode>()
         val seenEpisodes = HashSet<String>()
+        // Yalnızca URL şeklinden "bölüm" olduğu anlaşılan linkler için sezon
+        // başına artan sayaç tutuyoruz. Eski davranış (episodes.count{...}+1)
+        // karışık eşleşme türlerinde çift numara üretebiliyordu.
+        val fallbackNumbers = HashMap<Int, Int>()
         val textSeasonEpisode = Regex(
             """(\d+)\s*\.?\s*Sezon\s+(\d+)\s*\.?\s*B[oö]l[uü]m""",
             RegexOption.IGNORE_CASE
@@ -410,7 +434,9 @@ class NinjagoIzleseneProvider : MainAPI() {
                 }
                 isEpisodeLink(href, slug) -> {
                     season = 1
-                    episodeNumber = episodes.count { it.season == 1 } + 1
+                    val next = (fallbackNumbers[1] ?: 0) + 1
+                    fallbackNumbers[1] = next
+                    episodeNumber = next
                 }
                 else -> continue
             }
@@ -495,6 +521,9 @@ class NinjagoIzleseneProvider : MainAPI() {
         }
 
         var foundLink = false
+        // Doğrudan emit edilen ham linklerin (video/source etiketi ve regex ile
+        // bulunanlar) tekrar tekrar yayınlanmasını engeller.
+        val emittedDirectUrls = HashSet<String>()
         val playerPageUrls = mutableListOf(pageUrl)
         doc.select("a[href]").forEach { link ->
             val text = link.text().trim()
@@ -504,6 +533,11 @@ class NinjagoIzleseneProvider : MainAPI() {
             }
         }
         for (playerUrl in playerPageUrls.distinct()) {
+            // Bu sayfa için doğrulanmış (çözücü/video etiketi ile kanıtlanmış)
+            // başarı işareti. Yalnızca bu true olduğunda diğer "Oynatıcı N"
+            // sayfalarına geçmiyoruz; ham regex linki tek başına yeterli
+            // sayılmıyor — emit edildi diye oynatılabilir olduğu garantisi yok.
+            var playerResolved = false
             val playerDoc = if (playerUrl == pageUrl) doc else
                 runCatching { app.get(playerUrl, headers = headers).document }
                     .onFailure {
@@ -538,7 +572,10 @@ class NinjagoIzleseneProvider : MainAPI() {
                         resolveDzenEmbed(iframeUrl, playerUrl, subtitleCallback, callback)
                     }.onSuccess { success ->
                         Log.d("NinjagoIzlesene", "Dzen çözümü ($iframeUrl): sonuç=$success")
-                        if (success) foundLink = true
+                        if (success) {
+                            foundLink = true
+                            playerResolved = true
+                        }
                     }.onFailure {
                         Log.d("NinjagoIzlesene", "Dzen çözümü istisna fırlattı ($iframeUrl): ${it.message}")
                     }
@@ -547,7 +584,10 @@ class NinjagoIzleseneProvider : MainAPI() {
                 runCatching {
                     loadExtractor(iframeUrl, playerUrl, subtitleCallback, callback)
                 }.onSuccess { success ->
-                    if (success) foundLink = true
+                    if (success) {
+                        foundLink = true
+                        playerResolved = true
+                    }
                 }.onFailure {
                     Log.d("NinjagoIzlesene", "loadExtractor istisna fırlattı ($iframeUrl): ${it.message}")
                 }
@@ -556,6 +596,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                 element.attr("src").trim().takeIf { it.isNotBlank() }?.let { fixUrl(it) }
             }.distinct()
             for (videoUrl in videoUrls) {
+                if (!emittedDirectUrls.add(videoUrl)) continue
                 callback(
                     newExtractorLink(
                         source = name, name = "$name Video", url = videoUrl,
@@ -563,6 +604,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                     ) { this.referer = playerUrl }
                 )
                 foundLink = true
+                playerResolved = true
             }
             val playerHtml = normalizeEscapedHtml(playerDoc.html())
             Regex(
@@ -572,7 +614,10 @@ class NinjagoIzleseneProvider : MainAPI() {
                     runCatching {
                         loadExtractor(embedUrl, playerUrl, subtitleCallback, callback)
                     }.onSuccess { success ->
-                        if (success) foundLink = true
+                        if (success) {
+                            foundLink = true
+                            playerResolved = true
+                        }
                     }.onFailure {
                         Log.d("NinjagoIzlesene", "Gömülü Rumble linki başarısız ($embedUrl): ${it.message}")
                     }
@@ -585,7 +630,10 @@ class NinjagoIzleseneProvider : MainAPI() {
                     runCatching {
                         resolveDzenEmbed(embedUrl, playerUrl, subtitleCallback, callback)
                     }.onSuccess { success ->
-                        if (success) foundLink = true
+                        if (success) {
+                            foundLink = true
+                            playerResolved = true
+                        }
                     }.onFailure {
                         Log.d("NinjagoIzlesene", "Gömülü Dzen linki başarısız ($embedUrl): ${it.message}")
                     }
@@ -596,18 +644,28 @@ class NinjagoIzleseneProvider : MainAPI() {
             ).findAll(playerHtml)
                 .map { it.value.replace("&amp;", "&") }.distinct()
                 .forEach { directUrl ->
+                    if (!emittedDirectUrls.add(directUrl)) return@forEach
+                    // HLS manifestleri M3U8 tipinde yayınlanmalı; VIDEO tipi
+                    // yalnızca ileri sarmalı (progressive) mp4 için doğru.
+                    val isHls = directUrl
+                        .substringBefore("?")
+                        .endsWith(".m3u8", ignoreCase = true)
                     callback(
                         newExtractorLink(
-                            source = name, name = "$name Direct", url = directUrl,
-                            type = ExtractorLinkType.VIDEO
+                            source = name,
+                            name = if (isHls) "$name Direct HLS" else "$name Direct",
+                            url = directUrl,
+                            type = if (isHls) ExtractorLinkType.M3U8
+                            else ExtractorLinkType.VIDEO
                         ) { this.referer = playerUrl }
                     )
                     foundLink = true
+                    // Not: playerResolved bilinçli olarak SET edilmiyor —
+                    // ham regex linki doğrulanmış başarı sayılmaz.
                 }
-            // Bu oynatıcı sayfasında zaten oynatılabilir bir bağlantı bulunduysa
-            // diğer "Oynatıcı N" sayfalarını denemeye gerek yok; gereksiz ağ
-            // isteklerini (ve dolayısıyla açılma gecikmesini) önler.
-            if (foundLink) break
+            // Bu oynatıcı sayfasında doğrulanmış oynatılabilir bağlantı
+            // bulunduysa diğer "Oynatıcı N" sayfalarını denemeye gerek yok.
+            if (playerResolved) break
         }
         Log.d(
             "NinjagoIzlesene",
