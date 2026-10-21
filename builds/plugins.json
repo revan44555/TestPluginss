@@ -1,0 +1,42 @@
+[
+    {
+        "fileHash": "sha256-068a67f7cfcb65cd7cc6357090e0e63a0f4f1b7787d95221ae2b96a6a008d0ef",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/revan44555/TestPluginss",
+        "fileSize": 16615,
+        "status": 3,
+        "language": "tr",
+        "authors": [
+            "revan44555"
+        ],
+        "tvTypes": [
+            "Movie"
+        ],
+        "version": 1,
+        "internalName": "Filmmakinesi",
+        "description": "FilmMakinesi Turkce film sitesi (beta)",
+        "url": "https://raw.githubusercontent.com/revan44555/TestPluginss/master/Filmmakinesi.cs3",
+        "name": "Filmmakinesi"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=ninjagoizlesene.com.tr&sz=%size%",
+        "fileHash": "sha256-59b1d5e6131ba694847776ce6180e4d80984fed6249ae39afa14435cf7354603",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/revan44555/TestPluginss",
+        "fileSize": 38156,
+        "status": 1,
+        "language": "tr",
+        "authors": [
+            "revan44555"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie"
+        ],
+        "version": 9,
+        "internalName": "NinjagoIzlesene",
+        "description": "Ninjago \u0130zlesene \u2014 Ninjago b\u00f6l\u00fcmlerini izleme eklentisi",
+        "url": "https://raw.githubusercontent.com/revan44555/TestPluginss/master/NinjagoIzlesene.cs3",
+        "name": "NinjagoIzlesene"
+    }
+]
