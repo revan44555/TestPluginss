@@ -112,44 +112,44 @@ class StreamnaroParsingTest {
             StreamnaroParsing.EpisodeRoute("tt1234567", 1, 1),
             StreamnaroParsing.parseEpisodeRoute(
                 "${routePrefix}episode/tt1234567/1/1",
-                "streamnaro://"
+                routePrefix
             )
         )
         assertEquals(
             StreamnaroParsing.EpisodeRoute("tt1234567", 0, 9),
             StreamnaroParsing.parseEpisodeRoute(
                 "${routePrefix}episode/tt1234567/0/9",
-                "streamnaro://"
+                routePrefix
             )
         )
         assertNull(
             StreamnaroParsing.parseEpisodeRoute(
                 "${routePrefix}episode/tt1234567/-1/1",
-                "streamnaro://"
+                routePrefix
             )
         )
         assertNull(
             StreamnaroParsing.parseEpisodeRoute(
                 "${routePrefix}episode/tt1234567/1/0",
-                "streamnaro://"
+                routePrefix
             )
         )
         assertNull(
             StreamnaroParsing.parseEpisodeRoute(
                 "${routePrefix}episode/not-imdb/1/1",
-                "streamnaro://"
+                routePrefix
             )
         )
         assertNull(
             StreamnaroParsing.parseEpisodeRoute(
                 "${routePrefix}episode/tt1234567/1/1/extra",
-                "streamnaro://"
+                routePrefix
             )
         )
         assertNull(
             StreamnaroParsing.parseEpisodeRoute(
                 "https://example.org/episode/tt1234567/1/1",
-                "streamnaro://"
+                routePrefix
             )
         )
     }
