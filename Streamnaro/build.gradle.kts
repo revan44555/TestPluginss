@@ -18,6 +18,9 @@ dependencies {
     // runtime (visible in device log stack traces), but the plugin compile
     // classpath does not expose it. compileOnly lets the code build without
     // bundling a second copy into the plugin package.
-    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+    // The CloudStream gradle plugin pins kotlinx-coroutines to strictly 1.7.1
+    // (consistent resolution with the app's runtime copy), so the compileOnly
+    // version must match exactly.
+    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.1")
     testImplementation("junit:junit:4.13.2")
 }
