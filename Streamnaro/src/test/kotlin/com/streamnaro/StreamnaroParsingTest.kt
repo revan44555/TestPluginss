@@ -9,6 +9,19 @@ import org.junit.Test
 class StreamnaroParsingTest {
     private val routePrefix = "https://streamnaro.example/__catalog__/"
 
+    private val providers = listOf(
+        StreamnaroParsing.EmbedProvider(
+            name = "PathProvider",
+            movieTemplate = "https://embed.example/movie/{id}",
+            episodeTemplate = "https://embed.example/tv/{id}/{season}/{episode}"
+        ),
+        StreamnaroParsing.EmbedProvider(
+            name = "QueryProvider",
+            movieTemplate = "https://q.example/?video_id={id}",
+            episodeTemplate = "https://q.example/?video_id={id}&s={season}&e={episode}"
+        )
+    )
+
     @Test
     fun validatesImdbIdsStrictly() {
         assertTrue(StreamnaroParsing.isImdbId("tt12345"))
@@ -198,49 +211,70 @@ class StreamnaroParsingTest {
     }
 
     @Test
-    fun buildsOneCandidatePerMirrorForMovies() {
+    fun buildsOneCandidatePerProviderForMovies() {
         assertEquals(
             listOf(
-                "https://nhdapi.st/movie/tt1234567",
-                "https://nhdapi.com/movie/tt1234567",
-                "https://player.nhdapi.com/movie/tt1234567"
+                StreamnaroParsing.PlaybackCandidate(
+                    "https://embed.example/movie/tt1234567",
+                    "PathProvider"
+                ),
+                StreamnaroParsing.PlaybackCandidate(
+                    "https://q.example/?video_id=tt1234567",
+                    "QueryProvider"
+                )
             ),
             StreamnaroParsing.playbackPageCandidates(
                 "${routePrefix}movie/tt1234567",
                 routePrefix,
-                listOf("https://nhdapi.st", "https://nhdapi.com", "https://player.nhdapi.com")
+                providers
             )
         )
     }
 
     @Test
-    fun buildsPathAndQueryCandidatesPerMirrorForEpisodes() {
+    fun buildsPathAndQueryCandidatesPerProviderForEpisodes() {
         assertEquals(
             listOf(
-                "https://nhdapi.st/tv/tt1234567/2/9",
-                "https://nhdapi.st/tv/tt1234567?season=2&episode=9",
-                "https://nhdapi.com/tv/tt1234567/2/9",
-                "https://nhdapi.com/tv/tt1234567?season=2&episode=9"
+                StreamnaroParsing.PlaybackCandidate(
+                    "https://embed.example/tv/tt1234567/2/9",
+                    "PathProvider"
+                ),
+                StreamnaroParsing.PlaybackCandidate(
+                    "https://q.example/?video_id=tt1234567&s=2&e=9",
+                    "QueryProvider"
+                )
             ),
             StreamnaroParsing.playbackPageCandidates(
                 "${routePrefix}episode/tt1234567/2/9",
                 routePrefix,
-                listOf("https://nhdapi.st", "https://nhdapi.com")
+                providers
             )
         )
     }
 
     @Test
-    fun candidateListPrefersPathShapeForSingleUrlCompatibility() {
-        // playbackPageUrl must keep returning the historical path shape so the
-        // documented behavior stays intact while the fallback list grows.
-        val candidates = StreamnaroParsing.playbackPageCandidates(
-            "${routePrefix}episode/tt1234567/2/9",
-            routePrefix,
-            listOf("https://nhdapi.st")
+    fun skipsMalformedProvidersWithoutSilencingTheChain() {
+        val mixed = listOf(
+            StreamnaroParsing.EmbedProvider(
+                name = "Broken",
+                movieTemplate = "notaurl/{id}",
+                episodeTemplate = "http://insecure.example/tv/{id}/{season}/{episode}"
+            ),
+            providers[0]
         )
-        assertEquals("https://nhdapi.st/tv/tt1234567/2/9", candidates.first())
-        assertEquals(2, candidates.size)
+        assertEquals(
+            listOf(
+                StreamnaroParsing.PlaybackCandidate(
+                    "https://embed.example/movie/tt1234567",
+                    "PathProvider"
+                )
+            ),
+            StreamnaroParsing.playbackPageCandidates(
+                "${routePrefix}movie/tt1234567",
+                routePrefix,
+                mixed
+            )
+        )
     }
 
     @Test
@@ -249,27 +283,15 @@ class StreamnaroParsingTest {
             StreamnaroParsing.playbackPageCandidates(
                 "${routePrefix}series/tt1234567",
                 routePrefix,
-                listOf("https://nhdapi.st")
+                providers
             ).isEmpty()
         )
         assertTrue(
             StreamnaroParsing.playbackPageCandidates(
                 "https://streamnaro.example.evil/__catalog__/movie/tt1234567",
                 routePrefix,
-                listOf("https://nhdapi.st")
+                providers
             ).isEmpty()
-        )
-    }
-
-    @Test
-    fun dropsMalformedOrInsecureMirrorBases() {
-        assertEquals(
-            listOf("https://nhdapi.st/movie/tt1234567"),
-            StreamnaroParsing.playbackPageCandidates(
-                "${routePrefix}movie/tt1234567",
-                routePrefix,
-                listOf("", "notaurl", "http://insecure.example", "https://nhdapi.st/")
-            )
         )
     }
 
