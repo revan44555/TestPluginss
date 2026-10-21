@@ -84,6 +84,7 @@ subprojects {
     dependencies {
         val cloudstream by configurations
         val implementation by configurations
+        val testImplementation by configurations
 
         // CloudStream
         cloudstream("com.lagradost:cloudstream3:pre-release")
@@ -116,6 +117,9 @@ subprojects {
         implementation(
             "com.fasterxml.jackson.module:jackson-module-kotlin:2.13.1"
         )
+
+        // Unit tests
+        testImplementation("junit:junit:4.13.1")
     }
 }
 
