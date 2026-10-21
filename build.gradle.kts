@@ -50,8 +50,9 @@ subprojects {
     }
 
     android {
-        namespace = "com.example"
-
+        // NOT: Her eklenti kendi build.gradle.kts dosyasinda kendi
+        // namespace'ini tanimlamalidir. Ortak "com.example" tanimi
+        // coklu eklenti derlemesinde paket catismasi yaratiyordu.
         defaultConfig {
             minSdk = 21
             compileSdkVersion(35)
