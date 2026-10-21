@@ -47,6 +47,7 @@ class StreamnaroParsingTest {
         assertNull(StreamnaroParsing.safeHttpsManifestUrl("https://user:password@cdn.example.org/master.m3u8"))
         assertNull(StreamnaroParsing.safeHttpsManifestUrl("https://cdn.example.org/video.mp4"))
         assertNull(StreamnaroParsing.safeHttpsManifestUrl("https://cdn.example.org/video.mp4?next=.m3u8"))
+        assertNull(StreamnaroParsing.safeHttpsManifestUrl("https://cdn.example.org/notmaster.txt"))
         assertNull(StreamnaroParsing.safeHttpsManifestUrl("file:///tmp/master.m3u8"))
     }
 
