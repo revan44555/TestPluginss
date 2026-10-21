@@ -1,0 +1,48 @@
+name: Pull Request Build
+
+on:
+  pull_request:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.12"
+          cache-provider: basic
+
+      - name: Run Streamnaro unit tests
+        run: gradle :Streamnaro:testDebugUnitTest --stacktrace
+
+      - name: Build plugins
+        run: gradle make makePluginsJson --stacktrace
+
+      - name: Upload installable plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: streamnaro-cs3
+          path: |
+            **/build/*.cs3
+            build/plugins.json
+          if-no-files-found: error
