@@ -31,6 +31,38 @@ class StreamnaroParsingTest {
     }
 
     @Test
+    fun buildsCinemetaCatalogPaginationPaths() {
+        assertEquals(
+            "https://v3-cinemeta.strem.io/catalog/movie/top.json",
+            StreamnaroParsing.catalogPageUrl(
+                "https://v3-cinemeta.strem.io/catalog/movie/top.json",
+                0
+            )
+        )
+        assertEquals(
+            "https://v3-cinemeta.strem.io/catalog/movie/top/skip=100.json",
+            StreamnaroParsing.catalogPageUrl(
+                "https://v3-cinemeta.strem.io/catalog/movie/top.json",
+                100
+            )
+        )
+        assertEquals(
+            "https://v3-cinemeta.strem.io/catalog/series/top/skip=200.json",
+            StreamnaroParsing.catalogPageUrl(
+                "https://v3-cinemeta.strem.io/catalog/series/top",
+                200
+            )
+        )
+        assertEquals(
+            "https://v3-cinemeta.strem.io/catalog/movie/top.json",
+            StreamnaroParsing.catalogPageUrl(
+                "https://v3-cinemeta.strem.io/catalog/movie/top",
+                -100
+            )
+        )
+    }
+
+    @Test
     fun parsesEpisodeCoordinatesFromFieldsOrVideoId() {
         assertEquals(
             2 to 9,
