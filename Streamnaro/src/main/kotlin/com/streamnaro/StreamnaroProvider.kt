@@ -2,7 +2,6 @@ package com.streamnaro
 
 import android.util.Log
 import android.webkit.CookieManager
-import kotlinx.coroutines.delay
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.lagradost.cloudstream3.*
@@ -239,8 +238,10 @@ class StreamnaroProvider : MainAPI() {
 
             var foundLinks = false
             // Signed manifest URLs can lose the minting race right after capture
-            // (first re-fetch answered with an error page). One silent retry
+            // (first re-fetch answered with an error page). One immediate retry
             // converts most of those transient failures into playable links.
+            // NB: kotlinx.coroutines is not on the plugin compile classpath, so
+            // the retry runs back-to-back without a suspending delay.
             for (attempt in 0 until 2) {
                 if (foundLinks) break
                 for (request in requests) {
@@ -265,7 +266,7 @@ class StreamnaroProvider : MainAPI() {
                     "Accept-Language"
                 ).mapNotNull { headerName ->
                     request.header(headerName)?.let { headerName to it }
-                }.toMap()
+                }.toMap() + cookieHeaderFor(streamUrl)
 
                 try {
                     val links = M3u8Helper.generateM3u8(
@@ -288,7 +289,6 @@ class StreamnaroProvider : MainAPI() {
 
                 if (!foundLinks && attempt == 0) {
                     Log.w(TAG, "Manifest fetch produced no playable links; retrying once.")
-                    delay(1_000)
                 }
             }
 
