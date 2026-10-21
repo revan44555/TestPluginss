@@ -40,9 +40,10 @@ class StreamnaroProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         val mediaType = if (request.data.contains("/catalog/series/")) "series" else "movie"
-        val baseUrl = request.data.substringBefore('?')
+        val catalogBaseUrl = request.data.substringBefore('?').removeSuffix(".json")
         val skip = ((page.coerceAtLeast(1) - 1) * PAGE_SIZE)
-        val response = getJson("$baseUrl?skip=$skip")
+        val pageUrl = StreamnaroParsing.catalogPageUrl(catalogBaseUrl, skip)
+        val response = getJson(pageUrl)
         val items = parseSearchResponses(response, mediaType)
         return newHomePageResponse(
             request.name,
