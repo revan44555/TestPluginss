@@ -18,6 +18,12 @@ internal object StreamnaroParsing {
     fun isImdbId(value: String): Boolean = imdbIdPattern.matches(value)
 
     /**
+     * Pagination must use the upstream metas count, before invalid IDs are filtered.
+     */
+    fun hasNextPage(upstreamItemCount: Int, pageSize: Int): Boolean =
+        pageSize > 0 && upstreamItemCount >= pageSize
+
+    /**
      * Use the upstream result count for pagination. Parsed entries can be fewer
      * than the returned metas when an upstream item has an unsupported ID.
      */
