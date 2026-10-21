@@ -47,6 +47,10 @@ subprojects {
             System.getenv("GITHUB_REPOSITORY")
                 ?: "user/repo"
         )
+        // Tek dal (master) kullanimi: plugins.json icindeki indirme
+        // URL'leri raw.githubusercontent.com/.../master/... olarak
+        // uretilsin. Varsayilan "builds" dali bu depoda yok.
+        buildBranch = "master"
     }
 
     android {
