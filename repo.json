@@ -3,6 +3,6 @@
   "description": "Revan'ın CloudStream eklentileri",
   "manifestVersion": 1,
   "pluginLists": [
-    "https://raw.githubusercontent.com/revan44555/TestPluginss/builds/plugins.json"
+    "https://raw.githubusercontent.com/revan44555/TestPluginss/master/builds/plugins.json"
   ]
 }
