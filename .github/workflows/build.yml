@@ -56,6 +56,11 @@ jobs:
           gradle-version: "8.12"
           cache-provider: basic
 
+      - name: Run unit tests
+        working-directory: src
+        run: |
+          gradle test --stacktrace
+
       - name: Build Plugins
         working-directory: src
         run: |
