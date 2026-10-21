@@ -1,6 +1,8 @@
 package com.streamnaro
 
 import android.util.Log
+import android.webkit.CookieManager
+import kotlinx.coroutines.delay
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.lagradost.cloudstream3.*
@@ -25,6 +27,13 @@ import java.util.concurrent.CancellationException
  * the embed layer now walks a chain of independent IMDb-compatible providers
  * until one yields a capturable HLS manifest. Each candidate is probed cheaply
  * over plain HTTP first, so dead providers are tried last.
+ *
+ * Two reliability details from device testing: the manifest re-fetch carries the
+ * session cookie that the embed page set for that exact host (CookieManager is
+ * URL-scoped, so nothing leaks to other hosts; without it some CDNs answer the
+ * re-fetch with a bare 403 that M3u8Helper reports as an invalid playlist), and
+ * the re-fetch is retried once because signed tokens occasionally lose the
+ * minting race right after capture.
  */
 class StreamnaroProvider : MainAPI() {
     override var mainUrl = "https://streamnaro.online"
@@ -229,7 +238,12 @@ class StreamnaroProvider : MainAPI() {
                 .distinctBy { it.url.toString() }
 
             var foundLinks = false
-            for (request in requests) {
+            // Signed manifest URLs can lose the minting race right after capture
+            // (first re-fetch answered with an error page). One silent retry
+            // converts most of those transient failures into playable links.
+            for (attempt in 0 until 2) {
+                if (foundLinks) break
+                for (request in requests) {
                 val capturedUrl = request.url.toString()
                 if (!manifestPattern.containsMatchIn(capturedUrl)) continue
                 val streamUrl = StreamnaroParsing.safeHttpsManifestUrl(capturedUrl)
@@ -238,8 +252,11 @@ class StreamnaroProvider : MainAPI() {
                     continue
                 }
 
-                // Keep only headers commonly required by cross-origin HLS sources.
-                // Do not forward session cookies to playlist segment hosts.
+                // Keep headers commonly required by cross-origin HLS sources, and
+                // attach the session cookie the embed page set for THIS host only
+                // (CookieManager scopes by URL, so nothing leaks to other hosts).
+                // Some CDNs answer a cookie-less manifest re-fetch with a bare 403,
+                // which M3u8Helper then reports as an invalid playlist.
                 val playbackHeaders = listOf(
                     "Origin",
                     "Referer",
@@ -267,6 +284,12 @@ class StreamnaroProvider : MainAPI() {
                 } catch (error: Exception) {
                     Log.w(TAG, "Could not parse captured HLS manifest (" + error.javaClass.simpleName + ")")
                 }
+                }
+
+                if (!foundLinks && attempt == 0) {
+                    Log.w(TAG, "Manifest fetch produced no playable links; retrying once.")
+                    delay(1_000)
+                }
             }
 
             if (!foundLinks) {
@@ -279,6 +302,13 @@ class StreamnaroProvider : MainAPI() {
             Log.w(TAG, "Playback resolution failed for " + playerPage + " (" + error.javaClass.simpleName + ")")
             false
         }
+    }
+
+    private fun cookieHeaderFor(url: String): Map<String, String> {
+        val header = runCatching {
+            CookieManager.getInstance().getCookie(url)
+        }.getOrNull()
+        return if (header.isNullOrBlank()) emptyMap() else mapOf("Cookie" to header)
     }
 
     private fun originOf(url: String): String =
