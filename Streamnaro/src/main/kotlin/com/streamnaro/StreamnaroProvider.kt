@@ -139,7 +139,7 @@ class StreamnaroProvider : MainAPI() {
 
             val title = textField(meta, "name") ?: return@mapNotNull null
             val poster = safeHttpsUrl(textField(meta, "poster"))
-            val route = "$ROUTE_PREFIX/$mediaType/$id"
+            val route = "$ROUTE_PREFIX$mediaType/$id"
 
             when (mediaType) {
                 "movie" -> newMovieSearchResponse(title, route, TvType.Movie) {
@@ -169,7 +169,7 @@ class StreamnaroProvider : MainAPI() {
             if (season < 0 || episodeNumber < 1) return@mapNotNull null
 
             val title = textField(video, "title") ?: "Episode $episodeNumber"
-            val route = "$ROUTE_PREFIX/episode/$imdbId/$season/$episodeNumber"
+            val route = "$ROUTE_PREFIX$mediaType/$imdbId/$season/$episodeNumber"
 
             newEpisode(route) {
                 this.name = title
@@ -185,8 +185,8 @@ class StreamnaroProvider : MainAPI() {
     }
 
     private fun parseItemRoute(url: String): Pair<String, String>? {
-        if (!url.startsWith("$ROUTE_PREFIX/")) return null
-        val parts = url.removePrefix("$ROUTE_PREFIX/").split('/')
+        if (!url.startsWith(ROUTE_PREFIX)) return null
+        val parts = url.removePrefix(ROUTE_PREFIX).split('/')
         if (parts.size != 2) return null
         val type = parts[0]
         val id = parts[1]
