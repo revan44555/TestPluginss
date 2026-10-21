@@ -1,12 +1,12 @@
-version = 7
+version = 10
 
 cloudstream {
     description = "Streamnaro movies and TV catalog with multi-provider HLS playback (beta)"
     authors = listOf("revan44555")
     // Beta until HLS playback is verified end-to-end on a real Android device.
-    // v7: manifest re-fetch carries the host-scoped session cookie and is
-    // retried once (device findings: cookie-less re-fetch can 403; signed
-    // tokens can lose the minting race right after capture).
+    // v10: speculative playback resolution - the movie detail page dwell
+    // absorbs the WebView capture cost, so pressing play serves cached links
+    // and starts in seconds instead of ~15-25s.
     status = 3
     tvTypes = listOf("TvSeries", "Movie")
     iconUrl = "https://raw.githubusercontent.com/revan44555/TestPluginss/master/Streamnaro/branding/streamnaro-icon.png"
