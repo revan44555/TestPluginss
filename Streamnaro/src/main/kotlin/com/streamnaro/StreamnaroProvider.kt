@@ -8,10 +8,13 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.cloudstream3.utils.Coroutines
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.Collections
 import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Streamnaro catalog provider.
@@ -32,7 +35,9 @@ import java.util.concurrent.CancellationException
  * URL-scoped, so nothing leaks to other hosts; without it some CDNs answer the
  * re-fetch with a bare 403 that M3u8Helper reports as an invalid playlist), and
  * the re-fetch is retried once because signed tokens occasionally lose the
- * minting race right after capture.
+ * minting race right after capture, and each captured manifest is pre-validated
+ * with a direct fetch so opaque error pages are logged with their HTTP status
+ * instead of failing silently inside M3u8Helper.
  */
 class StreamnaroProvider : MainAPI() {
     override var mainUrl = "https://streamnaro.online"
@@ -115,6 +120,10 @@ class StreamnaroProvider : MainAPI() {
         val description = textField(meta, "description")
 
         return if (route.first == "movie") {
+            // Start resolving playback in the background while the user reads
+            // the page; loadLinks consumes the cache on play. runCatching keeps
+            // any speculation failure from breaking the page itself.
+            runCatching { speculateMoviePlayback(url) }
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = safeHttpsUrl(textField(meta, "background"))
@@ -153,6 +162,19 @@ class StreamnaroProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Consume speculatively resolved links first: fresh cache hits skip the
+        // whole WebView chain and start playback in seconds.
+        val cached = speculativeLinks.remove(data)
+        if (cached != null) {
+            val age = System.currentTimeMillis() - cached.capturedAt
+            if (age <= SPECULATIVE_TTL_MS && cached.links.isNotEmpty()) {
+                Log.i(TAG, "Using speculatively resolved links (" + cached.links.size + " entries).")
+                cached.links.forEach { callback(it) }
+                return true
+            }
+            Log.w(TAG, "Discarding stale speculative links (" + age + " ms old).")
+        }
+
         val candidates = StreamnaroParsing.playbackPageCandidates(
             internalRoute = data,
             routePrefix = routePrefix,
@@ -172,6 +194,38 @@ class StreamnaroProvider : MainAPI() {
 
         Log.w(TAG, "No playable HLS manifest was captured from any embed provider.")
         return false
+    }
+
+    /**
+     * Best-effort background resolution of a movie's playback links, triggered
+     * when its detail page opens. Uses the exact same chain as on-demand
+     * playback, so there is no second code path to maintain. Results live for
+     * SPECULATIVE_TTL_MS and are consumed by loadLinks on play.
+     */
+    private fun speculateMoviePlayback(internalRoute: String) {
+        if (speculativeLinks.containsKey(internalRoute)) return
+        if (!speculativeInflight.add(internalRoute)) return
+        Coroutines.ioThread {
+            try {
+                val resolved = mutableListOf<ExtractorLink>()
+                val succeeded = loadLinks(
+                    data = internalRoute,
+                    isCasting = false,
+                    subtitleCallback = { },
+                    callback = { resolved.add(it) }
+                )
+                if (succeeded && resolved.isNotEmpty()) {
+                    speculativeLinks[internalRoute] = CachedLinks(
+                        links = resolved.toList(),
+                        capturedAt = System.currentTimeMillis()
+                    )
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "Speculative playback resolution failed (" + error.javaClass.simpleName + ")")
+            } finally {
+                speculativeInflight.remove(internalRoute)
+            }
+        }
     }
 
     /**
@@ -268,6 +322,14 @@ class StreamnaroProvider : MainAPI() {
                     request.header(headerName)?.let { headerName to it }
                 }.toMap() + cookieHeaderFor(streamUrl)
 
+                // Pre-validate with our own fetch: some embed sources answer the
+                // re-fetch with an error page (dead or missing content). Without
+                // this gate that failure stays opaque inside M3u8Helper.
+                if (!isPlayableManifest(streamUrl, playbackHeaders)) {
+                    Log.w(TAG, "Skipping an unplayable manifest from " + playerPage)
+                    continue
+                }
+
                 try {
                     val links = M3u8Helper.generateM3u8(
                         source = "$name · $providerName",
@@ -300,6 +362,35 @@ class StreamnaroProvider : MainAPI() {
             throw cancelled
         } catch (error: Exception) {
             Log.w(TAG, "Playback resolution failed for " + playerPage + " (" + error.javaClass.simpleName + ")")
+            false
+        }
+    }
+
+    /**
+     * Fetch a captured manifest ourselves and verify it really is an HLS
+     * playlist before asking M3u8Helper to expand it. Non-2xx answers and
+     * non-playlist bodies are logged with status, content type and a short
+     * sanitized prefix so device logs explain *why* a source was skipped.
+     */
+    private suspend fun isPlayableManifest(url: String, headers: Map<String, String>): Boolean {
+        return try {
+            val response = app.get(url, headers = headers)
+            if (!response.isSuccessful) {
+                Log.w(TAG, "Manifest re-fetch answered HTTP " + response.code + " for " + url)
+                return false
+            }
+            val body = response.text
+            val playable = body.trimStart().startsWith("#EXTM3U")
+            if (!playable) {
+                val contentType = response.headers["Content-Type"] ?: "unknown"
+                val prefix = body.take(60).replace(Regex("\\s+"), " ")
+                Log.w(TAG, "Manifest re-fetch returned non-playlist content (" + contentType + ", " + body.length + " chars): " + prefix)
+            }
+            playable
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "Manifest re-fetch failed (" + error.javaClass.simpleName + ")")
             false
         }
     }
@@ -434,7 +525,23 @@ class StreamnaroProvider : MainAPI() {
         private const val TAG = "Streamnaro"
         private const val CINEMETA_URL = "https://v3-cinemeta.strem.io"
         private const val PAGE_SIZE = 100
-        private const val WEBVIEW_TIMEOUT_MS = 45_000L
+        // Observed slowest successful capture is ~19s (2Embed player boot).
+        // 30s leaves comfortable headroom while capping dead waits per provider.
+        private const val WEBVIEW_TIMEOUT_MS = 30_000L
+
+        // Speculative playback resolution: movie detail pages usually dwell for
+        // seconds before the user presses play, which comfortably covers the
+        // WebView capture cost. Resolving at page-open time turns the first play
+        // into a cache hit and cuts perceived startup to a few seconds.
+        private const val SPECULATIVE_TTL_MS = 15 * 60_000L
+        private val speculativeLinks = ConcurrentHashMap<String, CachedLinks>()
+        private val speculativeInflight =
+            Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+
+        private data class CachedLinks(
+            val links: List<ExtractorLink>,
+            val capturedAt: Long
+        )
 
         // Embed providers whose public players accept IMDb IDs directly, in
         // preference order. NHD (nhdapi.st/.com, player.nhdapi.com) was removed:
@@ -542,7 +649,8 @@ class StreamnaroProvider : MainAPI() {
                         } catch (_) {}
                     }
 
-                    if (attempts >= 90) clearInterval(timer);
+                    // 70 attempts x 400ms = 28s, inside the WebView timeout window.
+                    if (attempts >= 70) clearInterval(timer);
                 };
 
                 const timer = setInterval(tick, 400);
