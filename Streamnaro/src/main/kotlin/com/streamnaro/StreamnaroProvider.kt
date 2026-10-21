@@ -15,17 +15,16 @@ import java.util.concurrent.CancellationException
 /**
  * Streamnaro catalog provider.
  *
- * Cinemeta supplies catalog metadata. For playback, this provider opens the
- * publicly documented NHD player page and asks CloudStream's WebViewResolver to
- * capture the HLS manifest requested by that player. M3u8Helper expands a
- * master manifest into CloudStream playback-quality links.
+ * Cinemeta supplies catalog metadata. For playback, this provider opens public
+ * embed player pages that accept IMDb IDs and asks CloudStream's WebViewResolver
+ * to capture the HLS manifest requested by each player's script. M3u8Helper
+ * expands a master manifest into CloudStream playback-quality links.
  *
- * NHD rotates its front domains over time (nhdapi.st, nhdapi.com and
- * player.nhdapi.com have all served the same embed API), and episode pages
- * have shipped in both path and query-string forms. Playback therefore builds
- * an ordered candidate list from [StreamnaroParsing.playbackPageCandidates],
- * probes it cheaply over plain HTTP, and walks it until a mirror yields a
- * capturable HLS manifest.
+ * The original NHD player is gone: as of October 2026 its three front domains
+ * present third-party certificates (privatemedia.app / api.autoembed.in), so
+ * the embed layer now walks a chain of independent IMDb-compatible providers
+ * until one yields a capturable HLS manifest. Each candidate is probed cheaply
+ * over plain HTTP first, so dead providers are tried last.
  */
 class StreamnaroProvider : MainAPI() {
     override var mainUrl = "https://streamnaro.online"
@@ -34,11 +33,11 @@ class StreamnaroProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
     override val providerType = ProviderType.MetaProvider
-    // Playback resolution depends on a WebView to run the documented player page.
+    // Playback resolution depends on a WebView to run the embed player page.
     override val usesWebView = true
     // Captured HLS sources may require headers that are not portable to Cast devices.
     override val hasChromecastSupport = false
-    // No verified playable links exist yet, so download support would be misleading.
+    // Embed pages are ad-heavy; downloads are not offered.
     override val hasDownloadSupport = false
 
     override val mainPage = mainPageOf(
@@ -84,8 +83,6 @@ class StreamnaroProvider : MainAPI() {
         if (trimmed.isEmpty()) return emptyList()
 
         val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name()).replace("+", "%20")
-        // Use the provider's existing HTTP client; avoid relying on extra coroutine
-        // artifacts that are not present in the plugin's compile classpath.
         val movieResponse = getJson("$CINEMETA_URL/catalog/movie/top/search=$encoded.json")
         val seriesResponse = getJson("$CINEMETA_URL/catalog/series/top/search=$encoded.json")
         val movieResults = parseSearchResponses(movieResponse, "movie")
@@ -132,14 +129,15 @@ class StreamnaroProvider : MainAPI() {
     }
 
     /**
-     * Resolve an item through the NHD player's documented public embed page.
-     * The player dynamically requests HLS, so we capture that request instead
-     * of hard-coding a short-lived CDN URL from a browser session.
+     * Resolve an item through public embed pages that accept IMDb IDs.
+     * The player pages request HLS dynamically, so we capture that request
+     * instead of hard-coding short-lived CDN URLs.
      *
-     * Candidates come from [StreamnaroParsing.playbackPageCandidates]: every
-     * known NHD front domain, with both documented episode route shapes. They
-     * are tried in probe order until one produces a playable manifest, so a
-     * domain migration degrades playback to a slower start instead of a failure.
+     * Candidates come from [StreamnaroParsing.playbackPageCandidates]: one per
+     * configured provider, in preference order. They are probed cheaply over
+     * plain HTTP, then walked in a WebView until one produces a playable
+     * manifest, so a single provider outage degrades start time instead of
+     * failing playback.
      */
     override suspend fun loadLinks(
         data: String,
@@ -150,7 +148,7 @@ class StreamnaroProvider : MainAPI() {
         val candidates = StreamnaroParsing.playbackPageCandidates(
             internalRoute = data,
             routePrefix = routePrefix,
-            playerBaseUrls = NHD_PLAYER_URLS
+            providers = EMBED_PROVIDERS
         )
         if (candidates.isEmpty()) {
             Log.w(TAG, "Ignoring unsupported internal playback route.")
@@ -158,27 +156,30 @@ class StreamnaroProvider : MainAPI() {
         }
 
         val orderedCandidates = reorderByProbe(candidates)
-        for (playerPage in orderedCandidates) {
-            if (resolveManifestLinks(playerPage, callback)) {
+        for (candidate in orderedCandidates) {
+            if (resolveManifestLinks(candidate.url, candidate.providerName, callback)) {
                 return true
             }
         }
 
-        Log.w(TAG, "No playable HLS manifest was captured from any NHD mirror.")
+        Log.w(TAG, "No playable HLS manifest was captured from any embed provider.")
         return false
     }
 
     /**
      * Split candidates into probe-reachable and probe-unreachable buckets while
      * preserving the original order inside each bucket. A failed probe does not
-     * disqualify a candidate: NHD fronts its pages with Cloudflare, which may
-     * answer okhttp with a challenge page yet still render in the app's WebView.
+     * disqualify a candidate: many providers front their pages with Cloudflare,
+     * which may answer okhttp with a challenge yet still render in the app's
+     * WebView.
      */
-    private suspend fun reorderByProbe(candidates: List<String>): List<String> {
-        val reachable = mutableListOf<String>()
-        val unreachable = mutableListOf<String>()
+    private suspend fun reorderByProbe(
+        candidates: List<StreamnaroParsing.PlaybackCandidate>
+    ): List<StreamnaroParsing.PlaybackCandidate> {
+        val reachable = mutableListOf<StreamnaroParsing.PlaybackCandidate>()
+        val unreachable = mutableListOf<StreamnaroParsing.PlaybackCandidate>()
         for (candidate in candidates) {
-            if (probePlayerPage(candidate)) {
+            if (probePlayerPage(candidate.url)) {
                 reachable.add(candidate)
             } else {
                 unreachable.add(candidate)
@@ -194,7 +195,7 @@ class StreamnaroProvider : MainAPI() {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            Log.w(TAG, "NHD mirror probe failed (" + error.javaClass.simpleName + "): " + url)
+            Log.w(TAG, "Embed probe failed (" + error.javaClass.simpleName + "): " + url)
             false
         }
     }
@@ -202,10 +203,12 @@ class StreamnaroProvider : MainAPI() {
     /**
      * Open one candidate player page in the WebView resolver, capture the HLS
      * manifest request its player makes, and expose every parsed quality as an
-     * extractor link. Returns true only when at least one link was emitted.
+     * extractor link labelled with the provider name. Returns true only when at
+     * least one link was emitted.
      */
     private suspend fun resolveManifestLinks(
         playerPage: String,
+        providerName: String,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val manifestPattern = Regex("""(?i)(?:\.m3u8(?:[?#]|$)|(?:^|/)master\.txt(?:[?#]|$))""")
@@ -249,7 +252,7 @@ class StreamnaroProvider : MainAPI() {
 
                 try {
                     val links = M3u8Helper.generateM3u8(
-                        source = "$name · NHD",
+                        source = "$name · $providerName",
                         streamUrl = streamUrl,
                         referer = request.header("Referer") ?: referer,
                         headers = playbackHeaders,
@@ -400,18 +403,40 @@ class StreamnaroProvider : MainAPI() {
     companion object {
         private const val TAG = "Streamnaro"
         private const val CINEMETA_URL = "https://v3-cinemeta.strem.io"
-        // NHD rotates front domains for the same embed API. Order = preference:
-        // the first entry is the historical primary; later entries are fallbacks
-        // observed in the wild (nhdapi.com, player.nhdapi.com).
-        private val NHD_PLAYER_URLS = listOf(
-            "https://nhdapi.st",
-            "https://nhdapi.com",
-            "https://player.nhdapi.com"
-        )
         private const val PAGE_SIZE = 100
         private const val WEBVIEW_TIMEOUT_MS = 45_000L
 
-        // Browser-like headers for the cheap mirror probe; Cloudflare-fronted
+        // Embed providers whose public players accept IMDb IDs directly, in
+        // preference order. NHD (nhdapi.st/.com, player.nhdapi.com) was removed:
+        // all three domains now present third-party certificates (privatemedia.app
+        // and api.autoembed.in) — the service is defunct as of October 2026.
+        // 2embed.online is verified alive; vidsrc.sh and multiembed.mov publish
+        // IMDb-based embed APIs; AutoEmbed is kept last as the unverified
+        // successor hypothesis for the defunct NHD infrastructure.
+        private val EMBED_PROVIDERS = listOf(
+            StreamnaroParsing.EmbedProvider(
+                name = "2Embed",
+                movieTemplate = "https://www.2embed.online/embed/movie/{id}",
+                episodeTemplate = "https://www.2embed.online/embed/tv/{id}/{season}/{episode}"
+            ),
+            StreamnaroParsing.EmbedProvider(
+                name = "VidSrc",
+                movieTemplate = "https://vidsrc.sh/embed/movie/{id}",
+                episodeTemplate = "https://vidsrc.sh/embed/tv/{id}/{season}/{episode}"
+            ),
+            StreamnaroParsing.EmbedProvider(
+                name = "SuperEmbed",
+                movieTemplate = "https://multiembed.mov/?video_id={id}",
+                episodeTemplate = "https://multiembed.mov/?video_id={id}&s={season}&e={episode}"
+            ),
+            StreamnaroParsing.EmbedProvider(
+                name = "AutoEmbed",
+                movieTemplate = "https://api.autoembed.in/movie/{id}",
+                episodeTemplate = "https://api.autoembed.in/tv/{id}/{season}/{episode}"
+            )
+        )
+
+        // Browser-like headers for the cheap provider probe; Cloudflare-fronted
         // pages are far more likely to answer a real desktop UA with a 2xx.
         private val probeHeaders = mapOf(
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,*/*;q=0.8",

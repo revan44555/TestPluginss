@@ -15,6 +15,27 @@ internal object StreamnaroParsing {
         val episode: Int
     )
 
+    /**
+     * A named embed provider. Both templates must be absolute HTTPS URLs that
+     * contain an {id} placeholder; episode templates may also use {season} and
+     * {episode}. All placeholders are filled with the item's IMDb ID, so a
+     * provider only qualifies if its public embed accepts IMDb IDs.
+     */
+    data class EmbedProvider(
+        val name: String,
+        val movieTemplate: String,
+        val episodeTemplate: String
+    )
+
+    /**
+     * A concrete player page rendered from a provider template, paired with the
+     * provider name so resolved streams can be labelled by their source.
+     */
+    data class PlaybackCandidate(
+        val url: String,
+        val providerName: String
+    )
+
     fun isImdbId(value: String): Boolean = imdbIdPattern.matches(value)
 
     /**
@@ -103,7 +124,7 @@ internal object StreamnaroParsing {
     /**
      * Parse the internal route stored on an episode. This route is not a media
      * URL: it identifies the IMDb ID and episode coordinates used to build the
-     * documented player page when playback is requested.
+     * embed player page when playback is requested.
      */
     fun parseEpisodeRoute(url: String, routePrefix: String): EpisodeRoute? {
         if (!url.startsWith(routePrefix)) return null
@@ -119,62 +140,93 @@ internal object StreamnaroParsing {
     }
 
     /**
-     * Build the documented NHD player page for a movie or episode.
-     * Delegates to [playbackPageCandidates] so the single-URL convenience form
-     * can never drift from the candidate list used at playback time.
+     * Build the player page for a movie or episode on a single legacy NHD-style
+     * base URL (uniform /movie/{id} and /tv/{id}/{s}/{e} shapes).
+     *
+     * Retained for backward compatibility; new code should prefer
+     * [playbackPageCandidates] with explicit [EmbedProvider] templates, because
+     * real embed providers use heterogeneous route shapes.
      */
     fun playbackPageUrl(
         internalRoute: String,
         routePrefix: String,
         playerBaseUrl: String
-    ): String? = playbackPageCandidates(
-        internalRoute = internalRoute,
-        routePrefix = routePrefix,
-        playerBaseUrls = listOf(playerBaseUrl)
-    ).firstOrNull()
+    ): String? {
+        val base = playerBaseUrl.trim().trimEnd('/')
+        val baseIsSecure = runCatching {
+            val uri = URI(base)
+            uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()
+        }.getOrDefault(false)
+        if (!baseIsSecure) return null
+
+        val itemRoute = parseItemRoute(internalRoute, routePrefix)
+        if (itemRoute != null) {
+            if (itemRoute.first != "movie") return null
+            return "$base/movie/${itemRoute.second}"
+        }
+
+        val episode = parseEpisodeRoute(internalRoute, routePrefix) ?: return null
+        return "$base/tv/${episode.imdbId}/${episode.season}/${episode.episode}"
+    }
 
     /**
-     * Build every documented NHD player-page candidate for an item, ordered by
-     * domain preference.
+     * Build one player-page candidate per provider, in provider order. Each
+     * candidate carries its provider's name for source labelling. Providers
+     * whose templates are not absolute HTTPS URLs (or lack the placeholders
+     * required for the item type) are skipped individually, so one malformed
+     * entry can never silence the rest of the chain.
      *
-     * NHD infrastructure rotates front domains over time (nhdapi.st, nhdapi.com
-     * and player.nhdapi.com have all served the same embed API), and episode
-     * pages have shipped in both the path form /tv/{id}/{season}/{episode} and
-     * the query form /tv/{id}?season={s}&episode={e}. The provider probes and
-     * walks this list until one candidate yields a capturable HLS manifest.
-     *
-     * Malformed or non-HTTPS mirror bases are dropped; "series" item routes are
-     * intentionally not playable directly (only their episodes are).
+     * "series" item routes are intentionally not playable directly; only their
+     * episode routes produce candidates.
      */
     fun playbackPageCandidates(
         internalRoute: String,
         routePrefix: String,
-        playerBaseUrls: List<String>
-    ): List<String> {
-        val bases = playerBaseUrls
-            .map { it.trim().trimEnd('/') }
-            .filter { base ->
-                base.isNotEmpty() && runCatching {
-                    val uri = URI(base)
-                    uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()
-                }.getOrDefault(false)
-            }
-            .distinct()
-        if (bases.isEmpty()) return emptyList()
-
+        providers: List<EmbedProvider>
+    ): List<PlaybackCandidate> {
         val itemRoute = parseItemRoute(internalRoute, routePrefix)
         if (itemRoute != null) {
             if (itemRoute.first != "movie") return emptyList()
-            return bases.map { base -> "$base/movie/${itemRoute.second}" }
+            return providers.mapNotNull { provider ->
+                renderTemplate(provider.movieTemplate, itemRoute.second, null, null)
+                    ?.let { PlaybackCandidate(it, provider.name) }
+            }
         }
 
         val episode = parseEpisodeRoute(internalRoute, routePrefix) ?: return emptyList()
-        return bases.flatMap { base ->
-            listOf(
-                "$base/tv/${episode.imdbId}/${episode.season}/${episode.episode}",
-                "$base/tv/${episode.imdbId}?season=${episode.season}&episode=${episode.episode}"
-            )
+        return providers.mapNotNull { provider ->
+            renderTemplate(
+                provider.episodeTemplate,
+                episode.imdbId,
+                episode.season,
+                episode.episode
+            )?.let { PlaybackCandidate(it, provider.name) }
         }
+    }
+
+    private fun renderTemplate(
+        template: String,
+        id: String,
+        season: Int?,
+        episode: Int?
+    ): String? {
+        val trimmed = template.trim()
+        val templateIsSecure = runCatching {
+            val uri = URI(trimmed)
+            uri.scheme.equals("https", ignoreCase = true) &&
+                !uri.host.isNullOrBlank() &&
+                uri.userInfo == null
+        }.getOrDefault(false)
+        if (!templateIsSecure) return null
+        if (!trimmed.contains("{id}")) return null
+
+        val needsEpisode = trimmed.contains("{season}") || trimmed.contains("{episode}")
+        if (needsEpisode && (season == null || episode == null)) return null
+
+        return trimmed
+            .replace("{id}", id)
+            .replace("{season}", season?.toString() ?: "")
+            .replace("{episode}", episode?.toString() ?: "")
     }
 
     fun parseItemRoute(url: String, routePrefix: String): Pair<String, String>? {
