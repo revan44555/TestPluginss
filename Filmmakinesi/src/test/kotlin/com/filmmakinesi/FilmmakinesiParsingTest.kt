@@ -44,7 +44,7 @@ class FilmmakinesiParsingTest {
 
     @Test
     fun normalizesEscapedStreamUrls() {
-        val raw = "file:\"https:\/\/rapid.filmmakinesi.to\/cdn\/x.m3u8?a=1&amp;b=2\""
+        val raw = "file:\"https:\\/\\/rapid.filmmakinesi.to\\/cdn\\/x.m3u8?a=1&amp;b=2\""
         val normalized = FilmmakinesiParsing.normalizeEscaped(raw)
         assertTrue(normalized.contains("https://rapid.filmmakinesi.to/cdn/x.m3u8?a=1&b=2"))
     }
@@ -53,7 +53,7 @@ class FilmmakinesiParsingTest {
     fun extractsM3u8FromRawMarkup() {
         assertEquals(
             "https://rapid.filmmakinesi.to/cdn/master.m3u8?tok=1",
-            FilmmakinesiParsing.extractM3u8("sources:[{src:\"https:\/\/rapid.filmmakinesi.to\/cdn\/master.m3u8?tok=1\"}]")
+            FilmmakinesiParsing.extractM3u8("sources:[{src:\"https:\\/\\/rapid.filmmakinesi.to\\/cdn\\/master.m3u8?tok=1\"}]")
         )
         assertNull(FilmmakinesiParsing.extractM3u8("<html>no stream here</html>"))
     }
