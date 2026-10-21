@@ -23,11 +23,18 @@ class StreamnaroProvider : MainAPI() {
     override var lang = "en"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+    // No verified playable links exist yet, so download support would be misleading.
+    override val hasDownloadSupport = false
 
     override val mainPage = mainPageOf(
         "$CINEMETA_URL/catalog/movie/top.json" to "Movies",
         "$CINEMETA_URL/catalog/series/top.json" to "TV Series"
     )
+
+    // CloudStream resolves providers for saved items by matching URLs against mainUrl.
+    // Keep catalog routes under that URL namespace rather than using a custom URI scheme.
+    private val routePrefix: String
+        get() = "${mainUrl.trimEnd('/')}/__catalog__/"
 
     private val mapper = jacksonObjectMapper()
     private val headers = mapOf(
@@ -110,7 +117,7 @@ class StreamnaroProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val itemRoute = parseItemRoute(data)
-        val episodeRoute = StreamnaroParsing.parseEpisodeRoute(data, ROUTE_PREFIX)
+        val episodeRoute = StreamnaroParsing.parseEpisodeRoute(data, routePrefix)
 
         if (itemRoute == null && episodeRoute == null) {
             Log.w(TAG, "Ignoring unsupported internal playback route.")
@@ -152,7 +159,7 @@ class StreamnaroProvider : MainAPI() {
 
             val title = textField(meta, "name") ?: return@mapNotNull null
             val poster = safeHttpsUrl(textField(meta, "poster"))
-            val route = "$ROUTE_PREFIX$mediaType/$id"
+            val route = "$routePrefix$mediaType/$id"
 
             when (mediaType) {
                 "movie" -> newMovieSearchResponse(title, route, TvType.Movie) {
@@ -178,7 +185,7 @@ class StreamnaroProvider : MainAPI() {
             val (season, episodeNumber) = coordinates
 
             val title = textField(video, "title") ?: "Episode $episodeNumber"
-            val route = "$ROUTE_PREFIX" + "episode/$imdbId/$season/$episodeNumber"
+            val route = "${routePrefix}episode/$imdbId/$season/$episodeNumber"
 
             newEpisode(route) {
                 this.name = title
@@ -194,7 +201,7 @@ class StreamnaroProvider : MainAPI() {
     }
 
     private fun parseItemRoute(url: String): Pair<String, String>? =
-        StreamnaroParsing.parseItemRoute(url, ROUTE_PREFIX)
+        StreamnaroParsing.parseItemRoute(url, routePrefix)
 
     private fun textField(node: JsonNode, field: String): String? {
         return node.get(field)
@@ -216,7 +223,6 @@ class StreamnaroProvider : MainAPI() {
     companion object {
         private const val TAG = "Streamnaro"
         private const val CINEMETA_URL = "https://v3-cinemeta.strem.io"
-        private const val ROUTE_PREFIX = "streamnaro://"
         private const val PAGE_SIZE = 100
     }
 }
