@@ -211,22 +211,19 @@ internal object StreamnaroParsing {
         episode: Int?
     ): String? {
         val trimmed = template.trim()
-        val templateIsSecure = runCatching {
-            val uri = URI(trimmed)
-            uri.scheme.equals("https", ignoreCase = true) &&
-                !uri.host.isNullOrBlank() &&
-                uri.userInfo == null
-        }.getOrDefault(false)
-        if (!templateIsSecure) return null
         if (!trimmed.contains("{id}")) return null
 
         val needsEpisode = trimmed.contains("{season}") || trimmed.contains("{episode}")
         if (needsEpisode && (season == null || episode == null)) return null
 
-        return trimmed
+        // Substitute first, validate second: the raw template contains "{id}"
+        // placeholders, and java.net.URI rejects braces as illegal characters,
+        // so validating the template itself would silently drop every provider.
+        val rendered = trimmed
             .replace("{id}", id)
             .replace("{season}", season?.toString() ?: "")
             .replace("{episode}", episode?.toString() ?: "")
+        return safeHttpsUrl(rendered)
     }
 
     fun parseItemRoute(url: String, routePrefix: String): Pair<String, String>? {
