@@ -247,9 +247,13 @@ class StreamnaroProvider : MainAPI() {
             when (mediaType) {
                 "movie" -> newMovieSearchResponse(title, route, TvType.Movie) {
                     this.posterUrl = poster
+                    this.year = yearField(meta)
+                    this.score = scoreField(meta)
                 }
                 "series" -> newTvSeriesSearchResponse(title, route, TvType.TvSeries) {
                     this.posterUrl = poster
+                    this.year = yearField(meta)
+                    this.score = scoreField(meta)
                 }
                 else -> null
             }
