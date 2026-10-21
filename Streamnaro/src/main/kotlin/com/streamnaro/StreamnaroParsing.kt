@@ -73,28 +73,34 @@ internal object StreamnaroParsing {
         val candidate = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         return runCatching {
             val uri = URI(candidate)
-            val path = uri.path ?: return@runCatching null
-            val isManifestPath = path.endsWith(".m3u8", ignoreCase = true) ||
-                path.equals("master.txt", ignoreCase = true) ||
-                path.endsWith("/master.txt", ignoreCase = true)
+            val path = uri.path
+            val isManifestPath = path != null && (
+                path.endsWith(".m3u8", ignoreCase = true) ||
+                    path.equals("master.txt", ignoreCase = true) ||
+                    path.endsWith("/master.txt", ignoreCase = true)
+                )
+            // hls.js-style players mark manifest requests with a client-side
+            // fragment ("...#file.m3u8"). The fragment is never sent to the
+            // server, but it is a reliable signal that the URL is a playlist,
+            // so path-based checks alone must not reject it. The fragment is
+            // stripped from the returned URL because it carries no server
+            // meaning and some HTTP stacks refuse URLs containing one.
+            val fragment = uri.fragment
+            val isManifestFragment = fragment != null &&
+                fragment.endsWith(".m3u8", ignoreCase = true)
             if (
-                uri.scheme.equals("https", ignoreCase = true) &&
+                uri.scheme?.equals("https", ignoreCase = true) == true &&
                 !uri.host.isNullOrBlank() &&
                 uri.userInfo == null &&
-                isManifestPath
+                (isManifestPath || isManifestFragment)
             ) {
-                candidate
+                candidate.substringBefore('#')
             } else {
                 null
             }
         }.getOrNull()
     }
 
-    /**
-     * Cinemeta/Stremio catalog extras are path segments before ".json"
-     * (for example, /catalog/movie/top/skip=100.json), not query parameters
-     * after the JSON extension.
-     */
     fun catalogPageUrl(catalogBaseUrl: String, skip: Int): String {
         val base = catalogBaseUrl.trimEnd('/').removeSuffix(".json")
         val safeSkip = skip.coerceAtLeast(0)
