@@ -169,7 +169,7 @@ class StreamnaroProvider : MainAPI() {
             if (season < 0 || episodeNumber < 1) return@mapNotNull null
 
             val title = textField(video, "title") ?: "Episode $episodeNumber"
-            val route = "$ROUTE_PREFIX$mediaType/$imdbId/$season/$episodeNumber"
+            val route = "$ROUTE_PREFIX" + "episode/$imdbId/$season/$episodeNumber"
 
             newEpisode(route) {
                 this.name = title
