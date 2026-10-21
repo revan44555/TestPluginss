@@ -127,7 +127,7 @@ class StreamnaroProvider : MainAPI() {
             return false
         }
 
-        val manifestPattern = Regex("""(?i)(?:\.m3u8(?:[?#]|$)|master\.txt(?:[?#]|$))""")
+        val manifestPattern = Regex("""(?i)(?:\.m3u8(?:[?#]|$)|(?:^|/)master\.txt(?:[?#]|$))""")
         val resolver = WebViewResolver(
             interceptUrl = manifestPattern,
             useOkhttp = false,
