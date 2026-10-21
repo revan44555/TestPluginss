@@ -104,7 +104,11 @@ class StreamnaroProvider : MainAPI() {
         return if (route.first == "movie") {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = safeHttpsUrl(textField(meta, "background"))
                 this.plot = description
+                this.year = yearField(meta)
+                this.score = scoreField(meta)
+                this.tags = stringArrayField(meta, "genres")
             }
         } else {
             val episodes = parseEpisodes(meta, route.second)
