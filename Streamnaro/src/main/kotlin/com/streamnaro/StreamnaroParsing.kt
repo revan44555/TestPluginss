@@ -37,6 +37,32 @@ internal object StreamnaroParsing {
         }.getOrNull()
     }
 
+
+    /**
+     * Validate an HLS manifest URL before exposing it as a playable link.
+     * Only absolute HTTPS URLs with a host and no embedded credentials are accepted.
+     * A manifest suffix must appear in the URL path, not merely in its query string.
+     */
+    fun safeHttpsManifestUrl(value: String?): String? {
+        val candidate = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return runCatching {
+            val uri = URI(candidate)
+            val path = uri.path ?: return@runCatching null
+            val isManifestPath = path.endsWith(".m3u8", ignoreCase = true) ||
+                path.endsWith("master.txt", ignoreCase = true)
+            if (
+                uri.scheme.equals("https", ignoreCase = true) &&
+                !uri.host.isNullOrBlank() &&
+                uri.userInfo == null &&
+                isManifestPath
+            ) {
+                candidate
+            } else {
+                null
+            }
+        }.getOrNull()
+    }
+
     /**
      * Cinemeta/Stremio catalog extras are path segments before ".json"
      * (for example, /catalog/movie/top/skip=100.json), not query parameters
