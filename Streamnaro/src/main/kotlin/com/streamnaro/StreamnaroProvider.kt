@@ -55,13 +55,13 @@ class StreamnaroProvider : MainAPI() {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return emptyList()
 
-        val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name())
+        val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name()).replace("+", "%20")
         val movieResults = parseSearchResponses(
-            getJson("$CINEMETA_URL/catalog/movie/top.json?search=$encoded"),
+            getJson("$CINEMETA_URL/catalog/movie/top/search=$encoded.json"),
             "movie"
         )
         val seriesResults = parseSearchResponses(
-            getJson("$CINEMETA_URL/catalog/series/top.json?search=$encoded"),
+            getJson("$CINEMETA_URL/catalog/series/top/search=$encoded.json"),
             "series"
         )
 
