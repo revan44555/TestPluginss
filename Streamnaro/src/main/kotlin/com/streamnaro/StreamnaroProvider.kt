@@ -10,6 +10,8 @@ import com.lagradost.cloudstream3.network.WebViewResolver
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 /**
  * Streamnaro catalog provider.
@@ -21,16 +23,21 @@ import java.util.concurrent.CancellationException
  */
 class StreamnaroProvider : MainAPI() {
     override var mainUrl = "https://streamnaro.online"
-    override var name = "Streamnaro Catalog"
+    override var name = "Streamnaro"
     override var lang = "en"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+    override val providerType = ProviderType.MetaProvider
+    // Playback resolution depends on a WebView to run the documented player page.
+    override val usesWebView = true
+    // Captured HLS sources may require headers that are not portable to Cast devices.
+    override val hasChromecastSupport = false
     // No verified playable links exist yet, so download support would be misleading.
     override val hasDownloadSupport = false
 
     override val mainPage = mainPageOf(
-        "$CINEMETA_URL/catalog/movie/top.json" to "Movies",
-        "$CINEMETA_URL/catalog/series/top.json" to "TV Series"
+        "$CINEMETA_URL/catalog/movie/top.json" to "Popular Movies",
+        "$CINEMETA_URL/catalog/series/top.json" to "Popular TV Series"
     )
 
     // CloudStream resolves providers for saved items by matching URLs against mainUrl.
@@ -53,11 +60,16 @@ class StreamnaroProvider : MainAPI() {
         val skip = ((page.coerceAtLeast(1) - 1) * PAGE_SIZE)
         val pageUrl = StreamnaroParsing.catalogPageUrl(catalogBaseUrl, skip)
         val response = getJson(pageUrl)
+        val upstreamItemCount = response
+            ?.get("metas")
+            ?.takeIf { it.isArray }
+            ?.size()
+            ?: 0
         val items = parseSearchResponses(response, mediaType)
         return newHomePageResponse(
             request.name,
             items,
-            hasNext = items.size >= PAGE_SIZE
+            hasNext = StreamnaroParsing.hasNextPage(upstreamItemCount, PAGE_SIZE)
         )
     }
 
@@ -66,14 +78,17 @@ class StreamnaroProvider : MainAPI() {
         if (trimmed.isEmpty()) return emptyList()
 
         val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name()).replace("+", "%20")
-        val movieResults = parseSearchResponses(
-            getJson("$CINEMETA_URL/catalog/movie/top/search=$encoded.json"),
-            "movie"
-        )
-        val seriesResults = parseSearchResponses(
-            getJson("$CINEMETA_URL/catalog/series/top/search=$encoded.json"),
-            "series"
-        )
+        val (movieResponse, seriesResponse) = coroutineScope {
+            val movieRequest = async {
+                getJson("$CINEMETA_URL/catalog/movie/top/search=$encoded.json")
+            }
+            val seriesRequest = async {
+                getJson("$CINEMETA_URL/catalog/series/top/search=$encoded.json")
+            }
+            movieRequest.await() to seriesRequest.await()
+        }
+        val movieResults = parseSearchResponses(movieResponse, "movie")
+        val seriesResults = parseSearchResponses(seriesResponse, "series")
 
         return (movieResults + seriesResults).distinctBy { it.url }
     }
@@ -219,10 +234,10 @@ class StreamnaroProvider : MainAPI() {
     ): List<SearchResponse> {
         val metas = json?.get("metas")?.takeIf { it.isArray } ?: return emptyList()
         return metas.mapNotNull { meta ->
-            val id = textField(meta, "imdb_id")
-                ?: textField(meta, "id")
-                ?: return@mapNotNull null
-            if (!StreamnaroParsing.isImdbId(id)) return@mapNotNull null
+            val id = listOfNotNull(
+                textField(meta, "imdb_id"),
+                textField(meta, "id")
+            ).firstOrNull(StreamnaroParsing::isImdbId) ?: return@mapNotNull null
 
             val title = textField(meta, "name") ?: return@mapNotNull null
             val poster = safeHttpsUrl(textField(meta, "poster"))
