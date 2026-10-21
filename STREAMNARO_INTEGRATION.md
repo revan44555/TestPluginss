@@ -12,10 +12,14 @@ states. These are observations from the publicly rendered page, not proof that
 all browser sessions fail.
 
 The page labels include “Stream HD NHD API”, “2Embed Backup Server”, and three
-download-server options. The visible labels do not disclose a verified base URL,
-request schema, authentication method, content authorization model, or stable
-media response format. A label is not sufficient evidence that a service is a
-working API or that its streams are authorized.
+download-server options. Its settings text also describes a “Direct High Speed
+Server” using movie and TV route shapes `/movie/{IMDB_ID}` and
+`/tv/{IMDB_ID}/{S}/{E}`. These labels and route shapes do not identify a
+verified API base URL or establish request parameters, authentication, response
+schema, content authorization, or a stable media response. Opening the guessed
+same-origin paths did not provide a verifiable endpoint contract in this review.
+A label or route template alone is insufficient evidence that a service can be
+integrated reliably or that its streams are authorized.
 
 The page also says that it does not host content and tells visitors to use
 streams and downloads they are authorized to access. This repository does not
@@ -43,7 +47,7 @@ a 200 response for a `.m3u8` request is not by itself proof of end-to-end
 playability from CloudStream. Do not hard-code a captured browser URL or infer
 an API contract from this observation.
 
-## What was implemented in the initial PR
+## What was implemented
 
 - A separate `Streamnaro` CloudStream module discovered automatically by the
   root `settings.gradle.kts`.
@@ -52,6 +56,8 @@ an API contract from this observation.
   listing, based on the public interface described by the Stremio project:
   https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/advanced.md
 - IMDb ID validation and HTTPS-only poster URL filtering.
+- Unit tests for ID/URL validation, item routes, episode coordinates, and
+  episode playback-route validation.
 - A pull-request build workflow that compiles without publishing artifacts.
 
 This is a **metadata/catalog prototype**, not yet a working video-source
@@ -81,4 +87,4 @@ catalog or playback endpoint during this review. The browser capture narrows
 the technical observation to HLS playlist requests, but does not resolve the
 authorization or integration-contract questions. This implementation has not
 been built or run in a local Android/CloudStream runtime in this session.
-The new PR workflow is intended to supply the build check when GitHub runs it.
+The PR workflow supplies automated unit-test and plugin-build checks.
