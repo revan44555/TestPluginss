@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import kotlinx.coroutines.CancellationException
 
 /**
  * Metadata/catalog prototype for Streamnaro.
@@ -120,6 +121,8 @@ class StreamnaroProvider : MainAPI() {
             } else {
                 mapper.readTree(response.text)
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
             Log.w(TAG, "Metadata request failed (" + error.javaClass.simpleName + ")")
             null
@@ -216,7 +219,7 @@ class StreamnaroProvider : MainAPI() {
         private const val TAG = "Streamnaro"
         private const val CINEMETA_URL = "https://v3-cinemeta.strem.io"
         private const val ROUTE_PREFIX = "streamnaro://"
-        private const val PAGE_SIZE = 20
+        private const val PAGE_SIZE = 100
         private val IMDB_ID = Regex("^tt\\d{5,10}$")
     }
 }
