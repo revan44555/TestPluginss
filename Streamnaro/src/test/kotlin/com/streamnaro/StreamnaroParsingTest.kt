@@ -7,6 +7,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StreamnaroParsingTest {
+    private val routePrefix = "https://streamnaro.example/__catalog__/"
+
     @Test
     fun validatesImdbIdsStrictly() {
         assertTrue(StreamnaroParsing.isImdbId("tt12345"))
@@ -81,20 +83,26 @@ class StreamnaroParsingTest {
     fun parsesOnlySupportedItemRoutes() {
         assertEquals(
             "movie" to "tt12345",
-            StreamnaroParsing.parseItemRoute("streamnaro://movie/tt12345", "streamnaro://")
+            StreamnaroParsing.parseItemRoute("${routePrefix}movie/tt12345", routePrefix)
         )
         assertEquals(
             "series" to "tt123456",
-            StreamnaroParsing.parseItemRoute("streamnaro://series/tt123456", "streamnaro://")
+            StreamnaroParsing.parseItemRoute("${routePrefix}series/tt123456", routePrefix)
         )
         assertNull(
-            StreamnaroParsing.parseItemRoute("streamnaro://episode/tt12345/1/1", "streamnaro://")
+            StreamnaroParsing.parseItemRoute("${routePrefix}episode/tt12345/1/1", routePrefix)
         )
         assertNull(
-            StreamnaroParsing.parseItemRoute("streamnaro://movie/tt12345/extra", "streamnaro://")
+            StreamnaroParsing.parseItemRoute("${routePrefix}movie/tt12345/extra", routePrefix)
         )
         assertNull(
-            StreamnaroParsing.parseItemRoute("streamnaro://movie/not-an-imdb-id", "streamnaro://")
+            StreamnaroParsing.parseItemRoute("${routePrefix}movie/not-an-imdb-id", routePrefix)
+        )
+        assertNull(
+            StreamnaroParsing.parseItemRoute(
+                "https://streamnaro.example.evil/__catalog__/movie/tt12345",
+                routePrefix
+            )
         )
     }
 
@@ -103,38 +111,38 @@ class StreamnaroParsingTest {
         assertEquals(
             StreamnaroParsing.EpisodeRoute("tt1234567", 1, 1),
             StreamnaroParsing.parseEpisodeRoute(
-                "streamnaro://episode/tt1234567/1/1",
+                "${routePrefix}episode/tt1234567/1/1",
                 "streamnaro://"
             )
         )
         assertEquals(
             StreamnaroParsing.EpisodeRoute("tt1234567", 0, 9),
             StreamnaroParsing.parseEpisodeRoute(
-                "streamnaro://episode/tt1234567/0/9",
+                "${routePrefix}episode/tt1234567/0/9",
                 "streamnaro://"
             )
         )
         assertNull(
             StreamnaroParsing.parseEpisodeRoute(
-                "streamnaro://episode/tt1234567/-1/1",
+                "${routePrefix}episode/tt1234567/-1/1",
                 "streamnaro://"
             )
         )
         assertNull(
             StreamnaroParsing.parseEpisodeRoute(
-                "streamnaro://episode/tt1234567/1/0",
+                "${routePrefix}episode/tt1234567/1/0",
                 "streamnaro://"
             )
         )
         assertNull(
             StreamnaroParsing.parseEpisodeRoute(
-                "streamnaro://episode/not-imdb/1/1",
+                "${routePrefix}episode/not-imdb/1/1",
                 "streamnaro://"
             )
         )
         assertNull(
             StreamnaroParsing.parseEpisodeRoute(
-                "streamnaro://episode/tt1234567/1/1/extra",
+                "${routePrefix}episode/tt1234567/1/1/extra",
                 "streamnaro://"
             )
         )
