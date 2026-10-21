@@ -9,6 +9,12 @@ import java.net.URI
 internal object StreamnaroParsing {
     private val imdbIdPattern = Regex("^tt\\d{5,10}$")
 
+    data class EpisodeRoute(
+        val imdbId: String,
+        val season: Int,
+        val episode: Int
+    )
+
     fun isImdbId(value: String): Boolean = imdbIdPattern.matches(value)
 
     /**
@@ -45,6 +51,23 @@ internal object StreamnaroParsing {
         val parsedEpisode = episode ?: idParts.getOrNull(2)?.toIntOrNull() ?: return null
         if (parsedSeason < 0 || parsedEpisode < 1) return null
         return parsedSeason to parsedEpisode
+    }
+
+    /**
+     * Parse the internal route stored on an episode. This route is not a media
+     * URL: it identifies metadata coordinates for a future authorized resolver.
+     */
+    fun parseEpisodeRoute(url: String, routePrefix: String): EpisodeRoute? {
+        if (!url.startsWith(routePrefix)) return null
+        val parts = url.removePrefix(routePrefix).split('/')
+        if (parts.size != 4 || parts[0] != "episode") return null
+
+        val imdbId = parts[1]
+        val season = parts[2].toIntOrNull() ?: return null
+        val episode = parts[3].toIntOrNull() ?: return null
+        if (!isImdbId(imdbId) || season < 0 || episode < 1) return null
+
+        return EpisodeRoute(imdbId, season, episode)
     }
 
     fun parseItemRoute(url: String, routePrefix: String): Pair<String, String>? {
