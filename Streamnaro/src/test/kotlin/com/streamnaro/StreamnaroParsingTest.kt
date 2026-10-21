@@ -215,4 +215,11 @@ class StreamnaroParsingTest {
         )
     }
 
+
+    @Test
+    fun validatesPaginationBoundary() {
+        assertTrue(StreamnaroParsing.hasNextPage(100, 100))
+        assertFalse(StreamnaroParsing.hasNextPage(99, 100))
+        assertFalse(StreamnaroParsing.hasNextPage(100, 0))
+    }
 }
