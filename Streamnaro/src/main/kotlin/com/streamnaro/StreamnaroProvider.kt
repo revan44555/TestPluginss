@@ -10,8 +10,6 @@ import com.lagradost.cloudstream3.network.WebViewResolver
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 
 /**
  * Streamnaro catalog provider.
@@ -78,15 +76,10 @@ class StreamnaroProvider : MainAPI() {
         if (trimmed.isEmpty()) return emptyList()
 
         val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name()).replace("+", "%20")
-        val (movieResponse, seriesResponse) = coroutineScope {
-            val movieRequest = async {
-                getJson("$CINEMETA_URL/catalog/movie/top/search=$encoded.json")
-            }
-            val seriesRequest = async {
-                getJson("$CINEMETA_URL/catalog/series/top/search=$encoded.json")
-            }
-            movieRequest.await() to seriesRequest.await()
-        }
+        // Use the provider's existing HTTP client; avoid relying on extra coroutine
+        // artifacts that are not present in the plugin's compile classpath.
+        val movieResponse = getJson("$CINEMETA_URL/catalog/movie/top/search=$encoded.json")
+        val seriesResponse = getJson("$CINEMETA_URL/catalog/series/top/search=$encoded.json")
         val movieResults = parseSearchResponses(movieResponse, "movie")
         val seriesResults = parseSearchResponses(seriesResponse, "series")
 
