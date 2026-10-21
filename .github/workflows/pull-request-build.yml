@@ -32,16 +32,16 @@ jobs:
           gradle-version: "8.12"
           cache-provider: basic
 
-      - name: Run Streamnaro unit tests
-        run: gradle :Streamnaro:testDebugUnitTest --stacktrace
+      - name: Run unit tests
+        run: gradle test --stacktrace
 
       - name: Build plugins
         run: gradle make makePluginsJson --stacktrace
 
-      - name: Upload installable plugin
+      - name: Upload installable plugins
         uses: actions/upload-artifact@v4
         with:
-          name: streamnaro-cs3
+          name: plugins-cs3
           path: |
             **/build/*.cs3
             build/plugins.json
