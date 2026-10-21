@@ -198,6 +198,82 @@ class StreamnaroParsingTest {
     }
 
     @Test
+    fun buildsOneCandidatePerMirrorForMovies() {
+        assertEquals(
+            listOf(
+                "https://nhdapi.st/movie/tt1234567",
+                "https://nhdapi.com/movie/tt1234567",
+                "https://player.nhdapi.com/movie/tt1234567"
+            ),
+            StreamnaroParsing.playbackPageCandidates(
+                "${routePrefix}movie/tt1234567",
+                routePrefix,
+                listOf("https://nhdapi.st", "https://nhdapi.com", "https://player.nhdapi.com")
+            )
+        )
+    }
+
+    @Test
+    fun buildsPathAndQueryCandidatesPerMirrorForEpisodes() {
+        assertEquals(
+            listOf(
+                "https://nhdapi.st/tv/tt1234567/2/9",
+                "https://nhdapi.st/tv/tt1234567?season=2&episode=9",
+                "https://nhdapi.com/tv/tt1234567/2/9",
+                "https://nhdapi.com/tv/tt1234567?season=2&episode=9"
+            ),
+            StreamnaroParsing.playbackPageCandidates(
+                "${routePrefix}episode/tt1234567/2/9",
+                routePrefix,
+                listOf("https://nhdapi.st", "https://nhdapi.com")
+            )
+        )
+    }
+
+    @Test
+    fun candidateListPrefersPathShapeForSingleUrlCompatibility() {
+        // playbackPageUrl must keep returning the historical path shape so the
+        // documented behavior stays intact while the fallback list grows.
+        val candidates = StreamnaroParsing.playbackPageCandidates(
+            "${routePrefix}episode/tt1234567/2/9",
+            routePrefix,
+            listOf("https://nhdapi.st")
+        )
+        assertEquals("https://nhdapi.st/tv/tt1234567/2/9", candidates.first())
+        assertEquals(2, candidates.size)
+    }
+
+    @Test
+    fun rejectsUnsupportedRoutesForCandidateLists() {
+        assertTrue(
+            StreamnaroParsing.playbackPageCandidates(
+                "${routePrefix}series/tt1234567",
+                routePrefix,
+                listOf("https://nhdapi.st")
+            ).isEmpty()
+        )
+        assertTrue(
+            StreamnaroParsing.playbackPageCandidates(
+                "https://streamnaro.example.evil/__catalog__/movie/tt1234567",
+                routePrefix,
+                listOf("https://nhdapi.st")
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun dropsMalformedOrInsecureMirrorBases() {
+        assertEquals(
+            listOf("https://nhdapi.st/movie/tt1234567"),
+            StreamnaroParsing.playbackPageCandidates(
+                "${routePrefix}movie/tt1234567",
+                routePrefix,
+                listOf("", "notaurl", "http://insecure.example", "https://nhdapi.st/")
+            )
+        )
+    }
+
+    @Test
     fun rejectsUnsupportedPlaybackRoutes() {
         assertNull(
             StreamnaroParsing.playbackPageUrl(
@@ -214,7 +290,6 @@ class StreamnaroParsingTest {
             )
         )
     }
-
 
     @Test
     fun validatesPaginationBoundary() {
