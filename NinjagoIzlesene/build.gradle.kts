@@ -1,5 +1,9 @@
 version = 9
 
+android {
+    namespace = "com.ninjagoizlesene"
+}
+
 cloudstream {
     description = "Ninjago İzlesene — Ninjago bölümlerini izleme eklentisi"
     authors = listOf("revan44555")
