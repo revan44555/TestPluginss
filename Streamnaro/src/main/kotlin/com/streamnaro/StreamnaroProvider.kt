@@ -138,7 +138,7 @@ class StreamnaroProvider : MainAPI() {
             val id = textField(meta, "imdb_id")
                 ?: textField(meta, "id")
                 ?: return@mapNotNull null
-            if (!IMDB_ID.matches(id)) return@mapNotNull null
+            if (!StreamnaroParsing.isImdbId(id)) return@mapNotNull null
 
             val title = textField(meta, "name") ?: return@mapNotNull null
             val poster = safeHttpsUrl(textField(meta, "poster"))
@@ -160,16 +160,12 @@ class StreamnaroProvider : MainAPI() {
         val videos = meta.get("videos")?.takeIf { it.isArray } ?: return emptyList()
 
         return videos.mapNotNull { video ->
-            val videoId = textField(video, "id")
-            val idParts = videoId?.split(':').orEmpty()
-            val season = intField(video, "season")
-                ?: idParts.getOrNull(1)?.toIntOrNull()
-                ?: return@mapNotNull null
-            val episodeNumber = intField(video, "episode")
-                ?: idParts.getOrNull(2)?.toIntOrNull()
-                ?: return@mapNotNull null
-
-            if (season < 0 || episodeNumber < 1) return@mapNotNull null
+            val coordinates = StreamnaroParsing.parseEpisodeCoordinates(
+                textField(video, "id"),
+                intField(video, "season"),
+                intField(video, "episode")
+            ) ?: return@mapNotNull null
+            val (season, episodeNumber) = coordinates
 
             val title = textField(video, "title") ?: "Episode $episodeNumber"
             val route = "$ROUTE_PREFIX" + "episode/$imdbId/$season/$episodeNumber"
@@ -187,15 +183,8 @@ class StreamnaroProvider : MainAPI() {
             )
     }
 
-    private fun parseItemRoute(url: String): Pair<String, String>? {
-        if (!url.startsWith(ROUTE_PREFIX)) return null
-        val parts = url.removePrefix(ROUTE_PREFIX).split('/')
-        if (parts.size != 2) return null
-        val type = parts[0]
-        val id = parts[1]
-        if (type !in setOf("movie", "series") || !IMDB_ID.matches(id)) return null
-        return type to id
-    }
+    private fun parseItemRoute(url: String): Pair<String, String>? =
+        StreamnaroParsing.parseItemRoute(url, ROUTE_PREFIX)
 
     private fun textField(node: JsonNode, field: String): String? {
         return node.get(field)
@@ -211,15 +200,13 @@ class StreamnaroProvider : MainAPI() {
         return value.asInt()
     }
 
-    private fun safeHttpsUrl(value: String?): String? {
-        return value?.takeIf { it.startsWith("https://", ignoreCase = true) }
-    }
+    private fun safeHttpsUrl(value: String?): String? =
+        StreamnaroParsing.safeHttpsUrl(value)
 
     companion object {
         private const val TAG = "Streamnaro"
         private const val CINEMETA_URL = "https://v3-cinemeta.strem.io"
         private const val ROUTE_PREFIX = "streamnaro://"
         private const val PAGE_SIZE = 100
-        private val IMDB_ID = Regex("^tt\\d{5,10}$")
     }
 }
