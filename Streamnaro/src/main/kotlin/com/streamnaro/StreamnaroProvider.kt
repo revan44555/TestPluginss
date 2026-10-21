@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import kotlinx.coroutines.CancellationException
+import java.util.concurrent.CancellationException
 
 /**
  * Metadata/catalog prototype for Streamnaro.
