@@ -9,3 +9,7 @@ cloudstream {
     iconUrl = "https://www.google.com/s2/favicons?domain=streamnaro.online&sz=%size%"
     language = "en"
 }
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+}
