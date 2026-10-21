@@ -303,17 +303,16 @@ class StreamnaroProvider : MainAPI() {
                     attempts += 1;
                     if (!playClicked) {
                         const controls = Array.from(document.querySelectorAll(
-                            '.vjs-big-play-button, .jw-icon-display, .plyr__control--overlaid, ' +
-                            'button[aria-label*="play" i], [role="button"][aria-label*="play" i], button'
+                            '.vjs-big-play-button, .jw-icon-display, .plyr__control--overlaid, button, [role="button"], a'
                         ));
                         const play = controls.find((el) => {
                             const text = (el.innerText || el.textContent || '').trim();
                             const aria = el.getAttribute('aria-label') || '';
+                            const cls = typeof el.className === 'string' ? el.className.toLowerCase() : '';
                             const visible = !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
                             return visible && (/^play( video)?$/i.test(text) || /play/i.test(aria) ||
-                                el.classList.contains('vjs-big-play-button') ||
-                                el.classList.contains('jw-icon-display') ||
-                                el.classList.contains('plyr__control--overlaid'));
+                                cls.includes('big-play-button') || cls.includes('play-button') ||
+                                cls.includes('icon-display') || cls.includes('control--overlaid'));
                         });
                         if (play) {
                             playClicked = true;
