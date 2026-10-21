@@ -6,16 +6,22 @@ package com.filmmakinesi
  */
 internal object FilmmakinesiParsing {
 
+    // NOT: Desenler cift tirnak karakteri icerdigi icin raw string
+    // ("""...""") icinde yaziliyor. Normal "..." string icindeki "
+    // karakteri string'i erken bitirip derleme hatasina yol aciyordu.
+    // NOT 2: Alt alan adi oneki (or. "cdn.") opsiyonel — yayin URL'leri
+    // hem "rapid.filmmakinesi.to" hem "xxx.rapid.filmmakinesi.to" seklinde
+    // gorunebiliyor.
     private val playerHostPattern =
-        Regex("(?i)^https?://[a-z0-9-]*\\.(rapid|closeload)\\.filmmakinesi\\.to/")
+        Regex("""(?i)^https?://(?:[a-z0-9-]*\.)?(?:rapid|closeload)\.filmmakinesi\.to/""")
     private val barePlayerPattern =
-        Regex("https?://[a-z0-9-]*\\.(?:rapid|closeload)\\.filmmakinesi\\.to/[^\\s"'<>\\\\]+")
+        Regex("""https?://(?:[a-z0-9-]*\.)?(?:rapid|closeload)\.filmmakinesi\.to/[^\s"'<>\\]+""")
     private val attrCarrierPattern =
-        Regex("(?:src|data-(?:src|link|url|file))=["'](https?://[^"']+)["']")
+        Regex("""(?:src|data-(?:src|link|url|file))=["'](https?://[^"']+)["']""")
     private val m3u8Pattern =
-        Regex("(?i)(https?://[^\\s"'<>\\\\]+\\.m3u8[^\\s"'<>\\\\]*)")
-    private val yearPattern = Regex("\\b(19|20)\\d{2}\\b")
-    private val ratingPattern = Regex("\\b([0-9]\\.[0-9])\\b")
+        Regex("""(?i)(https?://[^\s"'<>\\]+\.m3u8[^\s"'<>\\]*)""")
+    private val yearPattern = Regex("""\b(19|20)\d{2}\b""")
+    private val ratingPattern = Regex("""\b([0-9]\.[0-9])\b""")
 
     fun isFilmUrl(href: String): Boolean {
         if (href.startsWith("javascript:", ignoreCase = true)) return false
@@ -51,7 +57,10 @@ internal object FilmmakinesiParsing {
             .replace("&amp;", "&")
 
     fun extractM3u8(raw: String): String? {
-        val match = m3u8Pattern.find(raw) ?: return null
+        // Embed sayfalari akis URL'lerini kacisli (\/) veriyor; deseni
+        // normalize edilmis metne uygula ki hem bu fonksiyon tek basina
+        // dogru calissin hem de birim testi beklenen degeri gorsun.
+        val match = m3u8Pattern.find(normalizeEscaped(raw)) ?: return null
         return match.value.trimEnd('"', '\'', ';', ',')
     }
 
