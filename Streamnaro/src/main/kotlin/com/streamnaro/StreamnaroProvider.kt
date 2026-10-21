@@ -98,9 +98,9 @@ class StreamnaroProvider : MainAPI() {
     }
 
     /**
-     * No Streamnaro playback endpoint has been verified. Returning false is
-     * deliberate: never treat a guessed URL or an unverified player page as a
-     * media stream. Implement this only against an authorized documented API.
+     * The site's browser-visible UI yielded HLS playlist requests, but not a
+     * verified, documented, authorized resolver contract. Validate our own item
+     * and episode routes before failing closed; never emit a captured browser URL.
      */
     override suspend fun loadLinks(
         data: String,
@@ -108,7 +108,16 @@ class StreamnaroProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.w(TAG, "Playback is not configured: no verified Streamnaro playback API.")
+        val itemRoute = parseItemRoute(data)
+        val episodeRoute = StreamnaroParsing.parseEpisodeRoute(data, ROUTE_PREFIX)
+
+        if (itemRoute == null && episodeRoute == null) {
+            Log.w(TAG, "Ignoring unsupported internal playback route.")
+            return false
+        }
+
+        val routeKind = if (episodeRoute != null) "episode" else itemRoute!!.first
+        Log.w(TAG, "Playback is not configured for $routeKind routes: no verified authorized playback API.")
         return false
     }
 
