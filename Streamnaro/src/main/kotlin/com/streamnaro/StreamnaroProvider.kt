@@ -8,7 +8,9 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.network.WebViewResolver
-import com.lagradost.cloudstream3.utils.Coroutines
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -205,7 +207,7 @@ class StreamnaroProvider : MainAPI() {
     private fun speculateMoviePlayback(internalRoute: String) {
         if (speculativeLinks.containsKey(internalRoute)) return
         if (!speculativeInflight.add(internalRoute)) return
-        Coroutines.ioThread {
+        CoroutineScope(Dispatchers.IO).launch {
             try {
                 val resolved = mutableListOf<ExtractorLink>()
                 val succeeded = loadLinks(
