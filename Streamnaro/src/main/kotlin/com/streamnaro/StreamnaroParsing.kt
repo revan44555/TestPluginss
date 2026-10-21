@@ -38,6 +38,21 @@ internal object StreamnaroParsing {
     }
 
     /**
+     * Cinemeta/Stremio catalog extras are path segments before ".json"
+     * (for example, /catalog/movie/top/skip=100.json), not query parameters
+     * after the JSON extension.
+     */
+    fun catalogPageUrl(catalogBaseUrl: String, skip: Int): String {
+        val base = catalogBaseUrl.trimEnd('/').removeSuffix(".json")
+        val safeSkip = skip.coerceAtLeast(0)
+        return if (safeSkip == 0) {
+            "$base.json"
+        } else {
+            "$base/skip=$safeSkip.json"
+        }
+    }
+
+    /**
      * Read season/episode numbers from Cinemeta fields, falling back to a video
      * ID formatted as <series-imdb-id>:<season>:<episode>.
      */
