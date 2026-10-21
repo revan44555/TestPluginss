@@ -32,5 +32,8 @@ jobs:
           gradle-version: "8.12"
           cache-provider: basic
 
+      - name: Run Streamnaro unit tests
+        run: gradle :Streamnaro:testDebugUnitTest --stacktrace
+
       - name: Build plugins
         run: gradle make makePluginsJson --stacktrace
