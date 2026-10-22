@@ -225,7 +225,7 @@ class FilmmakinesiParsingTest {
         assertTrue(snippet.contains("fromCharCode"))
         assertFalse(snippet.contains("TOPSECRET123"))
         assertFalse(snippet.contains("TOPSECRET123456"))
-        assertTrue(snippet.contains("[TEMPLATE_LITERAL:14]"))
+        assertTrue(snippet.contains("[TEMPLATE_LITERAL:15]"))
         assertFalse(snippet.contains("this-is-a-secret-fragment"))
         assertFalse(snippet.contains("https://cdn.example"))
         assertTrue(snippet.contains("[NUMERIC_ARRAY]"))
