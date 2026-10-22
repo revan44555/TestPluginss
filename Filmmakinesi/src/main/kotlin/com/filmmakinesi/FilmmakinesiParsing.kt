@@ -64,6 +64,29 @@ internal object FilmmakinesiParsing {
     private val base64TokenPattern = Regex("""\b([A-Za-z0-9+/]{20,}={0,2})\b""")
 
     // ---------------------------------------------------------------
+    // Parca-birlestirme (runtime atob) cozucusu
+    // ---------------------------------------------------------------
+    // Logcat (2026-10-22 10:46): embed sayfasi akis URL'sini hicbir yerde
+    // literal tutmuyor; parcalari kisri degiskenlere bolup
+    // "[p1,p2,...].reverse().join('')" ile birlestirip atob() ile aciyor
+    // (log: "file:atob(file_link)", sozlukte "rp5|end44|l30|reverse|...").
+    // Asagidaki desenler bu birlesimi statik olarak yeniden kurar:
+    // degisken atamalari, 'a'+'b' biciminde birlestirilmis atamalar,
+    // dizi-join kalibi ve atob(...) cagrilarinin argumanlari.
+    private val literalAssignPattern =
+        Regex("""(?<![.\w$])([A-Za-z_$][\w$]*)\s*=\s*["']([^"'\n]{1,160}?)["']""")
+    private val concatAssignPattern =
+        Regex("""(?<![.\w$])([A-Za-z_$][\w$]*)\s*=\s*((?:"[^"\n]{0,160}"|'[^'\n]{0,160}')(?:\s*\+\s*(?:"[^"\n]{0,160}"|'[^'\n]{0,160}')){1,15})""")
+    private val arrayJoinPattern =
+        Regex("""\[\s*([A-Za-z_$][\w$]*(?:\s*,\s*[A-Za-z_$][\w$]*){1,31})\s*\]\s*(?:\.\s*reverse\s*\(\s*\)\s*)?\.\s*join\s*\(\s*["']?([^)"']{0,4}?)["']?\s*\)""")
+    private val atobCallPattern =
+        Regex("""(?<![\w$.])atob\s*\(\s*([^)]{1,200}?)\s*\)""")
+    private val quotedPiecePattern =
+        Regex("""["'][^"'\n]{0,160}["']""")
+    private val identifierPattern =
+        Regex("""^[A-Za-z_$][\w$]*$""")
+
+    // ---------------------------------------------------------------
     // "Yavas ag" interstitial'i gibi araci sayfalardan yonlendirme cikarma
     // ---------------------------------------------------------------
     // Logcat'te rapid embed sayfasi 41KB'lik bir kabuk donduruyor
@@ -155,10 +178,30 @@ internal object FilmmakinesiParsing {
             }
         }
 
-        // Tespit zinciri: dizgun metin -> packer cozumu -> base64 token'lar
-        // -> base64 icinde packer. Her asama once bulunana kadar dener.
+        // Tespit zinciri: dizgun metin -> parca-birlestirme -> packer cozumu
+        // -> base64 token'lar -> base64 icinde packer.
         fun attempt(text: String) {
             collectFrom(text)
+            // Parca-birlestirme katmani KOSULSUZ calisir (logcat 2026-10-22
+            // 10:46): dizgun metinde yalnizca olu yem (decoy) manifest
+            // gorunse bile, parcali degiskenlerden derlenip atob ile
+            // acilan gercek token listeye eklenmeli; yem bu katmani
+            // engellememeli. Adaylar: packetten cikmis JS, dizgin metin ve
+            // ikisinin birlesimi (tanimlar farkli bolgelerde olabilir).
+            run {
+                val unpacked = unpackPackedJs(text)
+                val candidates = LinkedHashSet<String>()
+                unpacked?.let { candidates.addAll(reassembleFragmentedStreams(it)) }
+                candidates.addAll(reassembleFragmentedStreams(text))
+                unpacked?.let {
+                    candidates.addAll(reassembleFragmentedStreams(it + "\n" + text))
+                }
+                for (candidate in candidates) {
+                    collectFrom(candidate)
+                    tryDecodeBase64Text(candidate)?.let { collectFrom(it) }
+                    tryDecodeBase64Text(candidate.reversed())?.let { collectFrom(it) }
+                }
+            }
             if (found.isEmpty()) {
                 // JS string birlestirme temizligi: "https:"+"//cdn..." -> https://cdn...
                 // (cozulmus kaynak kodda parcali string'ler tek URL'ye birlesir)
@@ -210,10 +253,12 @@ internal object FilmmakinesiParsing {
      * JWPlayer setup(), sources/file alanlari ve saklama bicimleri
      * hangi bolgedeyse bir sonraki duzeltme ona gore yapilir.
      */
-    fun interestingSnippets(html: String, window: Int = 140): String {
+    fun interestingSnippets(html: String, window: Int = 220): String {
         val markers = listOf(
             "jwplayer", "setup(", "sources", "file:", "playlist",
-            "atob", "eval(", "m3u8", "master", ".txt"
+            "atob", "eval(", "m3u8", "master", ".txt",
+            // Yeni gizleme ipuclari (logcat 2026-10-22 10:46):
+            "file_link", "reverse", "fromCharCode", "split('|')", "fetch(", "XMLHttpRequest"
         )
         val parts = mutableListOf<String>()
         for (marker in markers) {
@@ -227,6 +272,26 @@ internal object FilmmakinesiParsing {
             }
         }
         return parts.joinToString(" | ")
+    }
+
+    /**
+     * Teshis: gizlemenin kalbindeki (eval-packer, atob, file_link) bolgeyi
+     * konum bilgisiyle dondurur. HTML basindaki CSS yerine dogrudan
+     * birlesim mantigini gormek icin; parca atamalarini bir sonraki
+     * logcat'te yakalamak icin kullanilir.
+     */
+    fun obfuscationRegionSnippet(html: String, window: Int = 1300): String? {
+        val anchors = listOf("file_link", "atob(", "eval(function(p,a,c,k,e,d)")
+        for (anchor in anchors) {
+            val index = html.indexOf(anchor, ignoreCase = true)
+            if (index >= 0) {
+                val start = maxOf(0, index - window / 3)
+                val end = minOf(html.length, index + window)
+                val region = html.substring(start, end).replace(Regex("\\s+"), " ")
+                return "[@$index $anchor] $region"
+            }
+        }
+        return null
     }
 
     /**
@@ -305,6 +370,112 @@ internal object FilmmakinesiParsing {
             }
         }
         return out.toList()
+    }
+
+    /**
+     * Parca-birlestirme adaylarini uretir: akis URL'si parcalara bolunup
+     * degiskenlere atanir, sonra (ters cevrilip) birlestirilerek atob()
+     * ile acilir. URL dogrulamasi cagiran tarafta (extractStreamUrls)
+     * URL desenleriyle yapilir; burada yalnizca aday dizgiler uretilir.
+     * Her aday hem duz hem ters yonde verilir, boylece .reverse()
+     * kullanimi ve split('').reverse().join('') varyantlari kaplanir.
+     */
+    fun reassembleFragmentedStreams(text: String): List<String> {
+        val literals = HashMap<String, String>()
+        // 0) 'a'+'b' biciminde birlestirilmis atamalar once tam deger olarak
+        //    sozluge yazilir (literalAssignPattern yalnizca ilk parci yakalar).
+        for (match in concatAssignPattern.findAll(text)) {
+            val joined = quotedPiecePattern.findAll(match.groupValues[2])
+                .joinToString("") { stripQuotes(it.value) }
+            if (joined.isNotBlank()) literals.putIfAbsent(match.groupValues[1], joined)
+        }
+        for (match in literalAssignPattern.findAll(text)) {
+            val value = match.groupValues[2]
+            if (value.isNotBlank()) literals.putIfAbsent(match.groupValues[1], value)
+        }
+        if (literals.isEmpty()) return emptyList()
+
+        val out = LinkedHashSet<String>()
+        // 1) [a,b,c].join('') — .reverse() olsun olmasin iki yonde aday uret
+        for (match in arrayJoinPattern.findAll(text)) {
+            val ids = match.groupValues[1].split(',').map { it.trim() }
+            if (ids.isEmpty() || ids.any { !literals.containsKey(it) }) continue
+            val forward = ids.joinToString("") { literals[it].orEmpty() }
+            val reverseOrder = ids.reversed().joinToString("") { literals[it].orEmpty() }
+            for (candidate in listOf(forward, reverseOrder)) {
+                if (candidate.length >= 8) {
+                    out.add(candidate)
+                    out.add(candidate.reversed())
+                }
+            }
+        }
+        // 2) atob(X) — X tanimlayici, birlestirme veya ters-cevirme ifadesi
+        for (match in atobCallPattern.findAll(text)) {
+            resolveAtobArgument(match.groupValues[1], literals)?.let { arg ->
+                if (arg.length >= 8) {
+                    out.add(arg)
+                    out.add(arg.reversed())
+                }
+            }
+        }
+        return out.toList()
+    }
+
+    private fun resolveAtobArgument(exprRaw: String, literals: Map<String, String>): String? {
+        val expr = exprRaw.trim()
+        if (expr.isEmpty()) return null
+        // Dizgi tersine cevirme: x.split('').reverse().join('')
+        if (expr.contains(".split(")) {
+            val base = resolveSimpleToken(expr.substringBefore(".").trim(), literals) ?: return null
+            return base.reversed()
+        }
+        // Birlestirme: a + b + 'c'
+        if (expr.contains("+")) {
+            val sb = StringBuilder()
+            for (rawToken in expr.split("+")) {
+                val piece = resolveSimpleToken(rawToken, literals) ?: return null
+                sb.append(piece)
+            }
+            return sb.toString().takeIf { it.isNotEmpty() }
+        }
+        return resolveSimpleToken(expr, literals)
+    }
+
+    private fun resolveSimpleToken(token: String, literals: Map<String, String>): String? {
+        val t = token.trim()
+        if (t.isEmpty()) return null
+        if ((t.startsWith("'") && t.endsWith("'") && t.length >= 2) ||
+            (t.startsWith("\"") && t.endsWith("\"") && t.length >= 2)
+        ) {
+            return t.substring(1, t.length - 1)
+        }
+        if (identifierPattern.matches(t)) return literals[t]
+        return null
+    }
+
+    private fun stripQuotes(s: String): String {
+        if (s.length >= 2 &&
+            ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith("\"") && s.endsWith("\"")))
+        ) {
+            return s.substring(1, s.length - 1)
+        }
+        return s
+    }
+
+    /**
+     * Uzunlugu ve karakter kumesi base64 uyumlu adaylari cozer; cozum
+     * basarisizsa null doner (aday URL degilse de sonuc URL deseni
+     * eslesmedigi icin zararsizca elenir).
+     */
+    internal fun tryDecodeBase64Text(candidate: String): String? {
+        val clean = candidate.filter { !it.isWhitespace() }
+        if (clean.length < 8 || clean.length % 4 != 0) return null
+        for (c in clean) {
+            val ok = c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' ||
+                c == '+' || c == '/' || c == '='
+            if (!ok) return null
+        }
+        return runCatching { String(base64Decode(clean), Charsets.UTF_8) }.getOrNull()
     }
 
     /** URL-safe olmayan, padding destekli minimal base64 cozucu (JVM/JUnit uyumlu). */

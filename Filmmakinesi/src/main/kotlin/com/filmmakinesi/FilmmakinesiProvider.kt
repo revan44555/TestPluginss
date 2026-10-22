@@ -275,7 +275,13 @@ class FilmmakinesiProvider : MainAPI() {
             lastRaw = FilmmakinesiParsing.normalizeEscaped(response.text)
             val streams = FilmmakinesiParsing.extractStreamUrls(lastRaw)
             if (streams.isNotEmpty()) {
-                return emitStreams(streams, playerUrl, referer, callback)
+                // DUZELTME (logcat 2026-10-22 10:46): Akis bulundugu halde
+                // hepsi olu yem (decoy) cikarsa emitStreams false doner.
+                // Eskiden return ile kisa devre yapiliyor; script taramasi,
+                // cookie-reload ve teshis adimlari hic calistirilmiyordu
+                // (film2 icin logda teshis satirlarinin yoklugu bunu
+                // kanitliyor). false durumunda kalan stratejilerle devam et.
+                if (emitStreams(streams, playerUrl, referer, callback)) return true
             }
             val next = FilmmakinesiParsing.extractRedirectTargets(lastRaw)
                 .map { FilmmakinesiParsing.safeAbsoluteUrl(it, currentUrl) }
@@ -340,6 +346,11 @@ class FilmmakinesiProvider : MainAPI() {
         // yapisini bir sonraki logcat'te gormek icin). 300 yerine 2000
         // karakter: interstitial'lerde asil ipucu head/script bolumunde.
         Log.w(TAG, "Embed isaretleri: " + FilmmakinesiParsing.interestingSnippets(lastRaw))
+        // Paketlenmis JS/atob bolgesi HTML basinin CSS'inde cok derinde;
+        // hedefli pencere gizleme cekirdegini tek seferde gosterir.
+        FilmmakinesiParsing.obfuscationRegionSnippet(lastRaw)?.let { region ->
+            Log.w(TAG, "Gizleme bolgesi: " + region)
+        }
         Log.w(TAG, "Embed HTML basi (HTTP " + lastStatus + ", " + lastRaw.length + " bayt): " +
             lastRaw.take(2000).replace(Regex("\\s+"), " "))
         Log.w(TAG, "Embed sayfasinda akis bulunamadi: " + playerUrl)
@@ -372,6 +383,11 @@ class FilmmakinesiProvider : MainAPI() {
                 // reddetti. Yayindan once ucuz bir HEAD ile 404/410
                 // kontrolu yap; canli degilse hic link uretme.
                 if (streamUrl.substringBefore("?").endsWith(".txt", ignoreCase = true)) {
+                    // DUZELTME (logcat 2026-10-22 10:46): Yanit yalnizca
+                    // .code icin acilip kapatilmadigi icin okhttp
+                    // "response.body().close()" uyarisi veriyordu; her yem
+                    // kontrolu bir baglanti sizdiriyordu. okhttpResponse
+                    // Closeable oldugu icin use bloguyla garanti kapatin.
                     val headCode = try {
                         app.head(
                             streamUrl,
@@ -380,7 +396,7 @@ class FilmmakinesiProvider : MainAPI() {
                                 "Origin" to origin,
                                 "User-Agent" to (headers["User-Agent"] ?: "")
                             )
-                        ).code
+                        ).okhttpResponse.use { it.code }
                     } catch (error: Exception) {
                         -1
                     }
