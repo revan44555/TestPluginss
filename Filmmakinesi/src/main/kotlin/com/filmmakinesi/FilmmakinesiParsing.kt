@@ -571,9 +571,14 @@ internal object FilmmakinesiParsing {
 
     fun safeAbsoluteUrl(url: String, base: String): String {
         val trimmed = url.trim()
+        if (trimmed.isBlank()) return base
         if (trimmed.startsWith("//")) return "https:" + trimmed
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
-        return base.trimEnd('/') + "/" + trimmed.trimStart('/')
+        return runCatching {
+            java.net.URI(base).resolve(java.net.URI(trimmed)).toString()
+        }.getOrElse {
+            base.trimEnd('/') + "/" + trimmed.trimStart('/')
+        }
     }
 
     fun hostOf(url: String): String =

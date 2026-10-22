@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import android.util.Log
+import java.util.concurrent.CancellationException
 
 class NinjagoIzleseneProvider : MainAPI() {
     override var mainUrl = "https://ninjagoizlesene.com.tr"
@@ -83,9 +84,13 @@ class NinjagoIzleseneProvider : MainAPI() {
             "Sec-Fetch-Mode" to "navigate",
             "Sec-Fetch-Site" to "cross-site"
         )
-        val embedResponse = runCatching {
+        val embedResponse = try {
             app.get(fixedEmbedUrl, headers = dzenHeaders)
-        }.getOrNull()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            null
+        }
         if (embedResponse == null) {
             Log.d("NinjagoIzlesene", "Dzen: embed sayfası hiç açılamadı: $fixedEmbedUrl")
             return false
@@ -410,7 +415,7 @@ class NinjagoIzleseneProvider : MainAPI() {
         }
     }
 
-    private fun extractEpisodes(doc: Document, pageUrl: String, slug: String): List<Episode> {
+    internal fun extractEpisodes(doc: Document, pageUrl: String, slug: String): List<Episode> {
         val episodes = mutableListOf<Episode>()
         val seenEpisodes = HashSet<String>()
         // URL şeklinden "bölüm" olduğu anlaşılamayan linkler için, doküman
@@ -476,7 +481,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                     episodeNumber = urlMatch.groupValues[2].toInt()
                 }
                 episodeOnlyMatch != null -> {
-                    season = 1
+                    season = currentSeason
                     episodeNumber = episodeOnlyMatch.groupValues[1].toInt()
                 }
                 isEpisodeLink(href, slug) -> {
@@ -487,6 +492,9 @@ class NinjagoIzleseneProvider : MainAPI() {
                 }
                 else -> continue
             }
+            // Nömrəsiz epizod sayğacı açıq yazılmış bölüm nömrələrini də nəzərə alır.
+            // Əks halda 3. Bölüm-dən sonra yeni epizod səhvən Bölüm 1 ola bilər.
+            fallbackNumbers[season] = maxOf(fallbackNumbers[season] ?: 0, episodeNumber)
             if (!seenEpisodes.add(href)) continue
             var episodeName = text
                 .replace(textSeasonEpisode, "")
@@ -588,6 +596,7 @@ class NinjagoIzleseneProvider : MainAPI() {
             val playerDoc = if (playerUrl == pageUrl) doc else
                 runCatching { app.get(playerUrl, headers = headers).document }
                     .onFailure {
+                        if (it is CancellationException) throw it
                         Log.d("NinjagoIzlesene", "Oynatıcı sayfası açılamadı ($playerUrl): ${it.message}")
                     }
                     .getOrNull()
@@ -624,6 +633,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                             playerResolved = true
                         }
                     }.onFailure {
+                        if (it is CancellationException) throw it
                         Log.d("NinjagoIzlesene", "Dzen çözümü istisna fırlattı ($iframeUrl): ${it.message}")
                     }
                     continue
@@ -636,6 +646,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                         playerResolved = true
                     }
                 }.onFailure {
+                    if (it is CancellationException) throw it
                     Log.d("NinjagoIzlesene", "loadExtractor istisna fırlattı ($iframeUrl): ${it.message}")
                 }
             }
@@ -666,6 +677,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                             playerResolved = true
                         }
                     }.onFailure {
+                        if (it is CancellationException) throw it
                         Log.d("NinjagoIzlesene", "Gömülü Rumble linki başarısız ($embedUrl): ${it.message}")
                     }
                 }
@@ -682,6 +694,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                             playerResolved = true
                         }
                     }.onFailure {
+                        if (it is CancellationException) throw it
                         Log.d("NinjagoIzlesene", "Gömülü Dzen linki başarısız ($embedUrl): ${it.message}")
                     }
                 }

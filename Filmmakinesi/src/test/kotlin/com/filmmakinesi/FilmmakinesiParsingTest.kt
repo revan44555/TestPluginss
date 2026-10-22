@@ -108,6 +108,20 @@ class FilmmakinesiParsingTest {
             "https://filmmakinesi.to/x",
             FilmmakinesiParsing.safeAbsoluteUrl("x", "https://filmmakinesi.to/")
         )
+        assertEquals(
+            "https://rapid.filmmakinesi.to/player/setup.js",
+            FilmmakinesiParsing.safeAbsoluteUrl(
+                "/player/setup.js",
+                "https://rapid.filmmakinesi.to/embed-abc/"
+            )
+        )
+        assertEquals(
+            "https://rapid.filmmakinesi.to/embed-abc/setup.js",
+            FilmmakinesiParsing.safeAbsoluteUrl(
+                "setup.js",
+                "https://rapid.filmmakinesi.to/embed-abc/"
+            )
+        )
     }
 
     @Test
