@@ -417,27 +417,35 @@ class FilmmakinesiProvider : MainAPI() {
                       );
                       if (button && attempts <= 3) button.click();
                     } catch (e) {}
-                    if (attempts < 40) setTimeout(kickPlayer, 500);
+                    if (attempts < 90) setTimeout(kickPlayer, 500);
                   }
                   setTimeout(kickPlayer, 250);
                 })();
             """.trimIndent()
 
             val resolver = WebViewResolver(
+                // Use the actual Android WebView user agent. Overriding it with
+                // an app-defined desktop UA can make Cloudflare return its error page.
+                userAgent = null,
                 // Never stop at the first playlist: some embeds deliberately
                 // request dead master.txt decoys before the working manifest.
                 interceptUrl = Regex("""(?!)"""),
                 additionalUrls = listOf(playlistRegex),
                 script = playScript,
                 useOkhttp = false,
-                timeout = 30_000L
+                timeout = 45_000L
             )
+            // Do not pass the provider's desktop User-Agent as an extra header.
+            // Let Chromium send a consistent, genuine WebView request fingerprint.
             val (_, capturedRequests) = resolver.resolveUsingWebView(
                 url = lastPageUrl,
                 referer = referer,
-                headers = headers + mapOf("Referer" to referer),
+                headers = mapOf("Referer" to referer),
                 requestCallBack = { false }
             )
+            val browserUserAgent = WebViewResolver.webViewUserAgent
+                ?.takeIf { it.isNotBlank() }
+                ?: headers["User-Agent"].orEmpty()
 
             // Prefer .m3u8, then other manifest names. Preserve the headers
             // and actual Referer from Chromium for token/cookie-protected hosts.
@@ -478,7 +486,7 @@ class FilmmakinesiProvider : MainAPI() {
                 )
                 val candidateHeaders = mergeStreamHeaders(
                     mapOf("Referer" to actualReferer, "Origin" to "https://$streamHost"),
-                    headers["User-Agent"]?.takeIf { it.isNotBlank() }?.let { mapOf("User-Agent" to it) } ?: emptyMap(),
+                    browserUserAgent.takeIf { it.isNotBlank() }?.let { mapOf("User-Agent" to it) } ?: emptyMap(),
                     playbackRequestHeaders
                 )
 
