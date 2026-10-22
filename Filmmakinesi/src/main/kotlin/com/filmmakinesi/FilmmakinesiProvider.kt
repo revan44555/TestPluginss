@@ -148,16 +148,47 @@ class FilmmakinesiProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return emptyList()
-        val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name()).replace("+", "%20")
-        val doc = try {
-            getDoc("$mainUrl/?s=$encoded")
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            Log.w(TAG, "Arama sayfasi acilamadi (" + error.javaClass.simpleName + ")")
-            return emptyList()
+
+        // Site arayuzu artik /kesfet/ katalog aramasini da kullaniyor.
+        // Parametre/tema degisikliklerine karsi birkac arama rotasini dene;
+        // ana sayfa kartlarini arama sonucuymus gibi dondurme.
+        for (searchUrl in FilmmakinesiParsing.searchUrls(trimmed, mainUrl)) {
+            val doc = try {
+                getDoc(searchUrl)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Arama rotasi acilamadi (" + error.javaClass.simpleName + ")")
+                continue
+            }
+
+            val matching = parseFilmCards(doc).filter {
+                FilmmakinesiParsing.searchTitleMatches(trimmed, it.name)
+            }
+            if (matching.isNotEmpty()) return matching.distinctBy { it.url }
         }
-        return parseFilmCards(doc)
+
+        // Son guvenli geri dusus: film arsivinin ilk sayfalarinda baslik
+        // eslesmesi ara. Bu, sitede bulunan ama ana sayfa bolumlerinde
+        // listelenmeyen filmleri bulur; tum arsivi indirmemek icin sinirlidir.
+        val catalogBase = "$mainUrl/filmler-1/"
+        for (page in 1..5) {
+            val pageUrl = if (page == 1) catalogBase
+                else catalogBase.replace("/filmler-1/", "/filmler-$page/")
+            val doc = try {
+                getDoc(pageUrl)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Arsiv arama sayfasi acilamadi (" + error.javaClass.simpleName + ")")
+                continue
+            }
+            val matching = parseFilmCards(doc).filter {
+                FilmmakinesiParsing.searchTitleMatches(trimmed, it.name)
+            }
+            if (matching.isNotEmpty()) return matching.distinctBy { it.url }
+        }
+        return emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse {
