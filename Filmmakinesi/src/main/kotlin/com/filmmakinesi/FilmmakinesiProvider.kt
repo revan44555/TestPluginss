@@ -413,7 +413,7 @@ class FilmmakinesiProvider : MainAPI() {
                     } catch (e) {}
                     try {
                       var button = document.querySelector(
-                        ".jw-display-icon-container, .jw-icon-playback, .vjs-big-play-button, [aria-label='Play'], [title='Play']"
+                        ".jw-display-icon-container, .vjs-big-play-button, [aria-label='Play'], [title='Play']"
                       );
                       if (button && attempts <= 3) button.click();
                     } catch (e) {}
