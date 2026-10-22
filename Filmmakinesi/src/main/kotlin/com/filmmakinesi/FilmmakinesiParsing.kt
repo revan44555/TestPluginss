@@ -209,7 +209,12 @@ internal object FilmmakinesiParsing {
                 .replace("'\"+\"'", "")
             if (rejoined != text) enqueue(rejoined)
 
-            unpackPackedJs(text)?.let(::enqueue)
+            val unpacked = unpackPackedJs(text)
+            if (unpacked != null) {
+                enqueue(unpacked)
+                // The variable definitions and their join expression can be in different layers.
+                enqueue(unpacked + "\n" + text)
+            }
             reassembleFragmentedStreams(text).take(48).forEach(::enqueue)
 
             // Decode only base64 payloads that look like URLs or player/JS source.
