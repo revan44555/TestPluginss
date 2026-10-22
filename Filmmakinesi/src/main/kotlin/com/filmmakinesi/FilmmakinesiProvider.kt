@@ -481,7 +481,7 @@ class FilmmakinesiProvider : MainAPI() {
                 val manifestText = probe?.text?.removePrefix("\uFEFF")?.trimStart().orEmpty()
                 if (probe != null && probe.isSuccessful && manifestText.startsWith("#EXTM3U")) {
                     Log.i(TAG, "WebView geçerli HLS manifesti yakaladı (host=$streamHost)")
-                    if (emitStreams(listOf(candidateUrl), playerUrl, actualReferer, callback, requestHeaders)) return true
+                    if (emitStreams(listOf(candidateUrl), playerUrl, actualReferer, callback, requestHeaders, manifestValidated = true)) return true
                 } else {
                     val status = probe?.code ?: -1
                     Log.w(TAG, "WebView manifest adayı geçersiz (HTTP=$status, host=$streamHost)")
@@ -523,7 +523,8 @@ class FilmmakinesiProvider : MainAPI() {
         playerUrl: String,
         referer: String,
         callback: (ExtractorLink) -> Unit,
-        capturedHeaders: Map<String, String> = emptyMap()
+        capturedHeaders: Map<String, String> = emptyMap(),
+        manifestValidated: Boolean = false
     ): Boolean {
         var emitted = false
         for (streamUrl in streams) {
@@ -542,7 +543,7 @@ class FilmmakinesiProvider : MainAPI() {
             if (FilmmakinesiParsing.isLikelyHls(streamUrl)) {
                 // .txt uçları bazen artık var olmayan decoy manifestlerdir.
                 // HTTP yanıtını kapatmayı garanti et ve 404/410 bağlantıları ele.
-                if (streamUrl.substringBefore("?").endsWith(".txt", ignoreCase = true)) {
+                if (!manifestValidated && streamUrl.substringBefore("?").endsWith(".txt", ignoreCase = true)) {
                     val headCode = try {
                         app.head(streamUrl, headers = playbackHeaders).okhttpResponse.use { it.code }
                     } catch (cancelled: CancellationException) {
