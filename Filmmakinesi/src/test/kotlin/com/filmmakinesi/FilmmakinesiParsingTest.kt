@@ -142,6 +142,39 @@ class FilmmakinesiParsingTest {
     }
 
     @Test
+    fun decodesStringFromCharCodeEmbeddedStream() {
+        val url = "https://cdn.x.y/hls/master.m3u8?sig=ABC123"
+        val codes = url.map { it.code }.joinToString(",")
+        val html = """<script>jwplayer("p").setup({file:String.fromCharCode($codes)});</script>"""
+
+        val urls = FilmmakinesiParsing.extractStreamUrls(html)
+
+        assertTrue(urls.any { it.contains(url) })
+    }
+
+    @Test
+    fun decodesFromCharCodeApplyEvenWhenDecoyManifestIsPresent() {
+        val url = "https://cdn.x.y/hls/real.m3u8?sig=REAL"
+        val codes = url.map { it.code }.joinToString(",")
+        val decoy = "https://hls8.playmix.uno/hls/dead.mp4/master.txt"
+        val html = """<script>var dead="$decoy"; var src=String.fromCharCode.apply(null,[$codes]);</script>"""
+
+        val urls = FilmmakinesiParsing.extractStreamUrls(html)
+
+        assertTrue("The stale manifest must not prevent deeper decoding", urls.any { it.contains(url) })
+    }
+
+    @Test
+    fun decodesHexCharCodesAndIgnoresComputedExpressions() {
+        val codes = "https://cdn.x/ok.m3u8".map { "0x" + it.code.toString(16) }.joinToString(",")
+        val good = """var src=String.fromCharCode($codes)"""
+        val bad = """var src=String.fromCharCode(value + 1, value + 2)"""
+
+        assertTrue(FilmmakinesiParsing.extractStreamUrls(good).any { it.contains("https://cdn.x/ok.m3u8") })
+        assertTrue(FilmmakinesiParsing.extractStreamUrls(bad).isEmpty())
+    }
+
+    @Test
     fun decodesBase64EmbeddedStream() {
         val b64 = java.util.Base64.getEncoder()
             .encodeToString("https://cdn.x.y/playlist.m3u8?sig=zz".toByteArray())
