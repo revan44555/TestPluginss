@@ -465,10 +465,21 @@ class FilmmakinesiProvider : MainAPI() {
                 }
                 val actualReferer = request.header("Referer")?.takeIf { it.isNotBlank() } ?: lastPageUrl
                 val streamHost = FilmmakinesiParsing.hostOf(candidateUrl)
+                // WebResourceRequest.requestHeaders can omit Cookie; read the
+                // URL-specific WebView cookie jar without logging its contents.
+                val webViewCookie = try {
+                    android.webkit.CookieManager.getInstance().getCookie(candidateUrl)
+                } catch (_: Exception) {
+                    null
+                }
+                val playbackRequestHeaders = mergeStreamHeaders(
+                    requestHeaders,
+                    webViewCookie?.takeIf { it.isNotBlank() }?.let { mapOf("Cookie" to it) } ?: emptyMap()
+                )
                 val candidateHeaders = mergeStreamHeaders(
                     mapOf("Referer" to actualReferer, "Origin" to "https://$streamHost"),
                     headers["User-Agent"]?.takeIf { it.isNotBlank() }?.let { mapOf("User-Agent" to it) } ?: emptyMap(),
-                    requestHeaders
+                    playbackRequestHeaders
                 )
 
                 val probe = try {
@@ -481,7 +492,7 @@ class FilmmakinesiProvider : MainAPI() {
                 val manifestText = probe?.text?.removePrefix("\uFEFF")?.trimStart().orEmpty()
                 if (probe != null && probe.isSuccessful && manifestText.startsWith("#EXTM3U")) {
                     Log.i(TAG, "WebView geçerli HLS manifesti yakaladı (host=$streamHost)")
-                    if (emitStreams(listOf(candidateUrl), playerUrl, actualReferer, callback, requestHeaders, manifestValidated = true)) return true
+                    if (emitStreams(listOf(candidateUrl), playerUrl, actualReferer, callback, playbackRequestHeaders, manifestValidated = true)) return true
                 } else {
                     val status = probe?.code ?: -1
                     Log.w(TAG, "WebView manifest adayı geçersiz (HTTP=$status, host=$streamHost)")
