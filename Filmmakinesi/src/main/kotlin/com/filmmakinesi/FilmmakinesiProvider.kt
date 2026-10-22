@@ -256,6 +256,7 @@ class FilmmakinesiProvider : MainAPI() {
         var currentUrl = playerUrl
         var lastRaw = ""
         var lastStatus = 0
+        var followedRedirect = false
 
         repeat(3) { hop ->
             if (!visited.add(currentUrl)) return@repeat
@@ -264,12 +265,12 @@ class FilmmakinesiProvider : MainAPI() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "Embed sayfasina ulasilamadi (" + error.javaClass.simpleName + "): " + currentUrl)
+                Log.w(TAG, "Embed sayfasina ulasilamadi (" + error.javaClass.simpleName + "), host=" + FilmmakinesiParsing.hostOf(currentUrl))
                 return false
             }
             lastStatus = response.code
             if (!response.isSuccessful) {
-                Log.w(TAG, "Embed sayfasi HTTP " + response.code + ": " + currentUrl)
+                Log.w(TAG, "Embed sayfasi HTTP " + response.code + ", host=" + FilmmakinesiParsing.hostOf(currentUrl))
                 return false
             }
             lastRaw = FilmmakinesiParsing.normalizeEscaped(response.text)
@@ -290,7 +291,8 @@ class FilmmakinesiProvider : MainAPI() {
                 // Yonlendirme yok: bu sayfa son durak (interstitial olabilir).
                 return@repeat
             }
-            Log.i(TAG, "Embed yonlendirmesi takip ediliyor (adim " + (hop + 1) + "): " + next)
+            Log.i(TAG, "Embed yonlendirmesi takip ediliyor (adim " + (hop + 1) + ", host=" + FilmmakinesiParsing.hostOf(next) + ")")
+            followedRedirect = true
             currentUrl = next
         }
 
@@ -312,8 +314,9 @@ class FilmmakinesiProvider : MainAPI() {
                     val scriptText = FilmmakinesiParsing.normalizeEscaped(scriptResponse.text)
                     val scriptStreams = FilmmakinesiParsing.extractStreamUrls(scriptText)
                     if (scriptStreams.isNotEmpty()) {
-                        Log.i(TAG, "Script icerisinde akis bulundu: " + script)
-                        return emitStreams(scriptStreams, playerUrl, referer, callback)
+                        Log.i(TAG, "Script icinde stream adayi bulundu (host=" + FilmmakinesiParsing.hostOf(script) + ")")
+                        if (emitStreams(scriptStreams, playerUrl, referer, callback)) return true
+                        Log.w(TAG, "Script stream adaylari oynatilamadi; diger kaynaklar denenecek (host=" + FilmmakinesiParsing.hostOf(script) + ")")
                     }
                 }
             }
@@ -321,10 +324,9 @@ class FilmmakinesiProvider : MainAPI() {
 
         // 4) Interstitial cookie set edip ayni URL'yi yeniden yukluyor
         // olabilir; tek seferlik kisa bekleyisle son kez dene.
-        if (lastRaw.isNotEmpty() && visited.size == 1) {
-            // kotlinx-coroutines eklenti classpath'inde yok; IO
-            // is parcaciginda kisa bloklama tolere edilebilir.
-            Thread.sleep(800)
+        if (lastRaw.isNotEmpty() && !followedRedirect) {
+            // OkHttp yanittaki Set-Cookie basliklarini cevap donmeden once isler;
+            // sunucu tarafli cookie icin bloklayan/artificial gecikme gerekmiyor.
             val retry = try {
                 app.get(playerUrl, headers = headers + mapOf("Referer" to referer))
             } catch (cancelled: CancellationException) {
@@ -336,8 +338,9 @@ class FilmmakinesiProvider : MainAPI() {
                 lastRaw = FilmmakinesiParsing.normalizeEscaped(retry.text)
                 val streams = FilmmakinesiParsing.extractStreamUrls(lastRaw)
                 if (streams.isNotEmpty()) {
-                    Log.i(TAG, "Cookie/reload sonrasi akis bulundu: " + playerUrl)
-                    return emitStreams(streams, playerUrl, referer, callback)
+                    Log.i(TAG, "Cookie/reload sonrasi stream adayi bulundu (host=" + FilmmakinesiParsing.hostOf(playerUrl) + ")")
+                    if (emitStreams(streams, playerUrl, referer, callback)) return true
+                    Log.w(TAG, "Cookie/reload stream adaylari oynatilamadi; hata teshisine devam edilir")
                 }
             }
         }
@@ -345,15 +348,16 @@ class FilmmakinesiProvider : MainAPI() {
         // Teshis: embed HTML'inin basini logla (sitenin yeni oyuncusunun
         // yapisini bir sonraki logcat'te gormek icin). 300 yerine 2000
         // karakter: interstitial'lerde asil ipucu head/script bolumunde.
-        Log.w(TAG, "Embed isaretleri: " + FilmmakinesiParsing.interestingSnippets(lastRaw))
-        // Paketlenmis JS/atob bolgesi HTML basinin CSS'inde cok derinde;
-        // hedefli pencere gizleme cekirdegini tek seferde gosterir.
-        FilmmakinesiParsing.obfuscationRegionSnippet(lastRaw)?.let { region ->
-            Log.w(TAG, "Gizleme bolgesi: " + region)
-        }
-        Log.w(TAG, "Embed HTML basi (HTTP " + lastStatus + ", " + lastRaw.length + " bayt): " +
-            lastRaw.take(2000).replace(Regex("\\s+"), " "))
-        Log.w(TAG, "Embed sayfasinda akis bulunamadi: " + playerUrl)
+        // Logcat'e ham HTML, imzali stream URL'leri veya gizlenmis JS parcalarini yazma.
+        val markers = listOf(
+            "jwplayer", "setup(", "sources", "file:", "playlist", "atob", "eval(",
+            "m3u8", "master", ".txt", "file_link", "reverse", "fromCharCode"
+        ).filter { lastRaw.contains(it, ignoreCase = true) }
+        Log.w(
+            TAG,
+            "Embed teshisi: HTTP=$lastStatus, bytes=${lastRaw.length}, host=${FilmmakinesiParsing.hostOf(playerUrl)}, markers=$markers"
+        )
+        Log.w(TAG, "Embed sayfasinda oynatilabilir akis bulunamadi (host=" + FilmmakinesiParsing.hostOf(playerUrl) + ")")
         return false
     }
 
@@ -364,12 +368,13 @@ class FilmmakinesiProvider : MainAPI() {
         referer: String,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val origin = runCatching {
-            "https://" + FilmmakinesiParsing.hostOf(streams.first())
-        }.getOrDefault("https://" + FilmmakinesiParsing.hostOf(playerUrl))
-
         var emitted = false
         for (streamUrl in streams) {
+            // Her CDN icin kendi Origin degerini kullan; ilk stream'in host'unu
+            // tum alternatiflere uygulamak bazi kaynaklarda 403 uretebilir.
+            val streamHost = FilmmakinesiParsing.hostOf(streamUrl)
+                .ifBlank { FilmmakinesiParsing.hostOf(playerUrl) }
+            val origin = "https://" + streamHost
             // DUZELTME: HLS karari artik yalnizca ".m3u8" uzantisina
             // dayanmiyor; manifest'ler "/master.", "/index." ve "/hls/"
             // path'leriyle de sunulabiliyor (or.
@@ -401,7 +406,7 @@ class FilmmakinesiProvider : MainAPI() {
                         -1
                     }
                     if (headCode == 404 || headCode == 410) {
-                        Log.w(TAG, "Manifest kapali (HTTP " + headCode + "), atlaniyor: " + streamUrl)
+                        Log.w(TAG, "Manifest kapali (HTTP " + headCode + "), host=" + FilmmakinesiParsing.hostOf(streamUrl))
                         continue
                     }
                 }

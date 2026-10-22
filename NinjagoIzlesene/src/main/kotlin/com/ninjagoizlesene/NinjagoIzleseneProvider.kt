@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import android.util.Log
+import java.util.concurrent.CancellationException
 
 class NinjagoIzleseneProvider : MainAPI() {
     override var mainUrl = "https://ninjagoizlesene.com.tr"
@@ -35,6 +36,9 @@ class NinjagoIzleseneProvider : MainAPI() {
         "Accept-Language" to "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
         "Referer" to "$mainUrl/"
     )
+
+    private fun isCandidatePlayerIframe(iframe: Element): Boolean =
+        NinjagoPlayerFrameFilter.isCandidate(iframe, mainUrl)
 
     // ---------------------------------------------------------------
     // Dzen.ru (Yandex Zen) çözücüsü — DOKUNULMADI
@@ -83,9 +87,13 @@ class NinjagoIzleseneProvider : MainAPI() {
             "Sec-Fetch-Mode" to "navigate",
             "Sec-Fetch-Site" to "cross-site"
         )
-        val embedResponse = runCatching {
+        val embedResponse = try {
             app.get(fixedEmbedUrl, headers = dzenHeaders)
-        }.getOrNull()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            null
+        }
         if (embedResponse == null) {
             Log.d("NinjagoIzlesene", "Dzen: embed sayfası hiç açılamadı: $fixedEmbedUrl")
             return false
@@ -476,17 +484,22 @@ class NinjagoIzleseneProvider : MainAPI() {
                     episodeNumber = urlMatch.groupValues[2].toInt()
                 }
                 episodeOnlyMatch != null -> {
-                    season = 1
-                    episodeNumber = episodeOnlyMatch.groupValues[1].toInt()
+                    val position = NinjagoEpisodeNumbers.episodeOnlyLabel(
+                        currentSeason,
+                        episodeOnlyMatch.groupValues[1].toInt()
+                    )
+                    season = position.season
+                    episodeNumber = position.episode
                 }
                 isEpisodeLink(href, slug) -> {
                     season = currentSeason
-                    val next = (fallbackNumbers[currentSeason] ?: 0) + 1
-                    fallbackNumbers[currentSeason] = next
-                    episodeNumber = next
+                    episodeNumber = NinjagoEpisodeNumbers.nextFallback(currentSeason, fallbackNumbers)
                 }
                 else -> continue
             }
+            // Nömrəsiz epizod sayğacı açıq yazılmış bölüm nömrələrini də nəzərə alır.
+            // Əks halda 3. Bölüm-dən sonra yeni epizod səhvən Bölüm 1 ola bilər.
+            NinjagoEpisodeNumbers.record(fallbackNumbers, season, episodeNumber)
             if (!seenEpisodes.add(href)) continue
             var episodeName = text
                 .replace(textSeasonEpisode, "")
@@ -523,13 +536,10 @@ class NinjagoIzleseneProvider : MainAPI() {
         var doc = app.get(pageUrl, headers = headers).document
 
         fun pageHasPlayableContent(document: org.jsoup.nodes.Document): Boolean {
-            val hasIframe = document.select("iframe").any {
-                val src = it.attr("src").trim()
-                val dataSrc = it.attr("data-src").trim()
-                (src.isNotBlank() && src != "about:blank") ||
-                    (dataSrc.isNotBlank() && dataSrc != "about:blank")
+            val hasIframe = document.select("iframe").any { NinjagoPlayerFrameFilter.isCandidate(it, mainUrl) }
+            val hasVideoTag = document.select("video[src], source[src]").any {
+                it.attr("src").trim().isNotBlank()
             }
-            val hasVideoTag = document.select("video[src], source[src]").isNotEmpty()
             return hasIframe || hasVideoTag
         }
         val path = pageUrl.substringAfter(mainUrl).trim('/')
@@ -588,6 +598,7 @@ class NinjagoIzleseneProvider : MainAPI() {
             val playerDoc = if (playerUrl == pageUrl) doc else
                 runCatching { app.get(playerUrl, headers = headers).document }
                     .onFailure {
+                        if (it is CancellationException) throw it
                         Log.d("NinjagoIzlesene", "Oynatıcı sayfası açılamadı ($playerUrl): ${it.message}")
                     }
                     .getOrNull()
@@ -624,6 +635,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                             playerResolved = true
                         }
                     }.onFailure {
+                        if (it is CancellationException) throw it
                         Log.d("NinjagoIzlesene", "Dzen çözümü istisna fırlattı ($iframeUrl): ${it.message}")
                     }
                     continue
@@ -636,6 +648,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                         playerResolved = true
                     }
                 }.onFailure {
+                    if (it is CancellationException) throw it
                     Log.d("NinjagoIzlesene", "loadExtractor istisna fırlattı ($iframeUrl): ${it.message}")
                 }
             }
@@ -666,6 +679,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                             playerResolved = true
                         }
                     }.onFailure {
+                        if (it is CancellationException) throw it
                         Log.d("NinjagoIzlesene", "Gömülü Rumble linki başarısız ($embedUrl): ${it.message}")
                     }
                 }
@@ -682,6 +696,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                             playerResolved = true
                         }
                     }.onFailure {
+                        if (it is CancellationException) throw it
                         Log.d("NinjagoIzlesene", "Gömülü Dzen linki başarısız ($embedUrl): ${it.message}")
                     }
                 }
