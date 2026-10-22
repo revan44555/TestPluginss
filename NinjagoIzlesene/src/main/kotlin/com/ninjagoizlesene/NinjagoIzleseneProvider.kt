@@ -531,7 +531,7 @@ class NinjagoIzleseneProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var pageUrl = fixUrl(data)
-        Log.d("NinjagoIzlesene", "loadLinks başladı, data='$data', pageUrl='$pageUrl'")
+        Log.d("NinjagoIzlesene", "loadLinks başladı, pageHost='${runCatching { java.net.URI(pageUrl).host }.getOrNull()}'")
 
         var doc = app.get(pageUrl, headers = headers).document
 
@@ -604,6 +604,7 @@ class NinjagoIzleseneProvider : MainAPI() {
                     .getOrNull()
                     ?: continue
             val iframeUrls = playerDoc.select("iframe").mapNotNull { iframe ->
+                if (!NinjagoPlayerFrameFilter.isCandidate(iframe, mainUrl)) return@mapNotNull null
                 val dataSrc = iframe.attr("data-src").trim()
                 val src = iframe.attr("src").trim()
                 val selected = when {
@@ -621,7 +622,7 @@ class NinjagoIzleseneProvider : MainAPI() {
             }.distinct()
             Log.d(
                 "NinjagoIzlesene",
-                "Oynatıcı sayfası: $playerUrl -> ${iframeUrls.size} iframe bulundu: $iframeUrls"
+                "Oynatıcı sayfası host=${runCatching { java.net.URI(playerUrl).host }.getOrNull()}, filtre sonrası iframe sayısı=${iframeUrls.size}"
             )
             for (iframeUrl in iframeUrls) {
                 // DZEN: aynı, dokunulmadı.
@@ -731,7 +732,7 @@ class NinjagoIzleseneProvider : MainAPI() {
         }
         Log.d(
             "NinjagoIzlesene",
-            "loadLinks tamamlandı. data=$data, foundLink=$foundLink, denenen oynatıcı sayısı=${playerPageUrls.distinct().size}"
+            "loadLinks tamamlandı. foundLink=$foundLink, denenen oynatıcı sayısı=${playerPageUrls.distinct().size}"
         )
         return foundLink
     }
