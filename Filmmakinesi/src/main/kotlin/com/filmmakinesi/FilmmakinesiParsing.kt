@@ -187,6 +187,9 @@ internal object FilmmakinesiParsing {
      */
     fun isLikelyHls(url: String): Boolean {
         val path = url.substringBefore("?").substringBefore("#").lowercase()
+        // A direct .mp4 under an /hls/ directory is still a video file;
+        // don't download the entire file just to test whether it is a manifest.
+        if (path.endsWith(".mp4")) return false
         if (path.endsWith(".m3u8")) return true
         if (path.contains("/master.") || path.contains("/index.")) return true
         if (path.contains("/playlist")) return true
