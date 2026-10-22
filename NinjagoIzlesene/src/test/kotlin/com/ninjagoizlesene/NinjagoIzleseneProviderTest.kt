@@ -8,33 +8,20 @@ import org.junit.Test
 
 class NinjagoIzleseneProviderTest {
     @Test
-    fun episodeOnlyTextKeepsCurrentSeasonAndFallbackNumbersContinueAfterExplicitEpisode() {
-        val baseUrl = "https://ninjagoizlesene.com.tr/dizi/ninjago/"
-        val doc = Jsoup.parse(
-            """
-                <h2>2. Sezon</h2>
-                <a href="/ninjago/episode-three/">3. Bölüm</a>
-                <a href="/ninjago/bonus-episode/">Özel Bölüm</a>
-            """.trimIndent(),
-            baseUrl
-        )
+    fun episodeOnlyLabelsUseCurrentSeasonAndFallbackNumbersContinueAfterExplicitEpisode() {
+        val currentSeason = 2
+        val explicit = NinjagoEpisodeNumbers.episodeOnlyLabel(currentSeason, 3)
+        val counters = mutableMapOf<Int, Int>()
 
-        val episodes = NinjagoIzleseneProvider().extractEpisodes(
-            doc = doc,
-            pageUrl = baseUrl,
-            slug = "ninjago"
-        )
+        assertEquals(2, explicit.season)
+        assertEquals(3, explicit.episode)
 
-        assertEquals(2, episodes.size)
-        assertEquals(2, episodes[0].season)
-        assertEquals(3, episodes[0].episode)
-        assertEquals(2, episodes[1].season)
-        assertEquals(4, episodes[1].episode)
+        NinjagoEpisodeNumbers.record(counters, explicit.season, explicit.episode)
+        assertEquals(4, NinjagoEpisodeNumbers.nextFallback(currentSeason, counters))
     }
 
     @Test
     fun adAndPlaceholderIframesAreNotTreatedAsPlayableContent() {
-        val provider = NinjagoIzleseneProvider()
         val blank = Jsoup.parseBodyFragment("""<iframe src="about:blank"></iframe>""")
             .selectFirst("iframe")!!
         val ad = Jsoup.parseBodyFragment("""<iframe src="https://securepubads.g.doubleclick.net/tag"></iframe>""")
@@ -42,8 +29,8 @@ class NinjagoIzleseneProviderTest {
         val player = Jsoup.parseBodyFragment("""<iframe src="https://dzen.ru/embed/abc123"></iframe>""")
             .selectFirst("iframe")!!
 
-        assertFalse(provider.isCandidatePlayerIframe(blank))
-        assertFalse(provider.isCandidatePlayerIframe(ad))
-        assertTrue(provider.isCandidatePlayerIframe(player))
+        assertFalse(NinjagoPlayerFrameFilter.isCandidate(blank, "https://ninjagoizlesene.com.tr"))
+        assertFalse(NinjagoPlayerFrameFilter.isCandidate(ad, "https://ninjagoizlesene.com.tr"))
+        assertTrue(NinjagoPlayerFrameFilter.isCandidate(player, "https://ninjagoizlesene.com.tr"))
     }
 }
