@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.util.concurrent.CancellationException
@@ -26,6 +27,7 @@ class FilmmakinesiProvider : MainAPI() {
     override var lang = "tr"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie)
+    override val usesWebView = true
 
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Ana Sayfa",
@@ -376,6 +378,136 @@ class FilmmakinesiProvider : MainAPI() {
             }
         }
 
+        // 5) Static çözümleme başarısızsa gerçek tarayıcı isteğini yakala.
+        // FilmMakinesi JWPlayer yapılandırmasında autostart=false bulunabiliyor;
+        // WebView sayfayı açmakla yetinmez, oynatıcıyı sessizce başlatmayı da dener.
+        try {
+            val playlistRegex = Regex(
+                """(?i)(\.m3u8(?:[?#]|$)|\.m3u(?:[?#]|$)|(?:master|index)[^/?#]*\.txt(?:[?#]|$)|playlist[^/?#]*(?:[/?#]|$))"""
+            )
+            val playScript = """
+                (function () {
+                  if (window.__fmCloudStreamPlayLoop) return;
+                  window.__fmCloudStreamPlayLoop = true;
+                  var attempts = 0;
+                  function kickPlayer() {
+                    attempts++;
+                    try {
+                      if (typeof window.jwplayer === "function") {
+                        var player = window.jwplayer();
+                        if (player && typeof player.play === "function") {
+                          try { if (typeof player.setMute === "function") player.setMute(true); } catch (e) {}
+                          try { if (typeof player.setVolume === "function") player.setVolume(0); } catch (e) {}
+                          try { player.play(true); } catch (e) {}
+                        }
+                      }
+                    } catch (e) {}
+                    try {
+                      var video = document.querySelector("video");
+                      if (video) {
+                        video.muted = true;
+                        video.playsInline = true;
+                        var promise = video.play();
+                        if (promise && promise.catch) promise.catch(function () {});
+                      }
+                    } catch (e) {}
+                    try {
+                      var button = document.querySelector(
+                        ".jw-display-icon-container, .vjs-big-play-button, [aria-label='Play'], [title='Play']"
+                      );
+                      if (button && attempts <= 3) button.click();
+                    } catch (e) {}
+                    if (attempts < 40) setTimeout(kickPlayer, 500);
+                  }
+                  setTimeout(kickPlayer, 250);
+                })();
+            """.trimIndent()
+
+            val resolver = WebViewResolver(
+                // Never stop at the first playlist: some embeds deliberately
+                // request dead master.txt decoys before the working manifest.
+                interceptUrl = Regex("""(?!)"""),
+                additionalUrls = listOf(playlistRegex),
+                script = playScript,
+                useOkhttp = false,
+                timeout = 30_000L
+            )
+            val (_, capturedRequests) = resolver.resolveUsingWebView(
+                url = lastPageUrl,
+                referer = referer,
+                headers = headers + mapOf("Referer" to referer),
+                requestCallBack = { false }
+            )
+
+            // Prefer .m3u8, then other manifest names. Preserve the headers
+            // and actual Referer from Chromium for token/cookie-protected hosts.
+            val candidates = capturedRequests
+                .distinctBy { it.url.toString() }
+                .sortedBy { request ->
+                    val url = request.url.toString()
+                    when {
+                        url.contains(".m3u8", ignoreCase = true) -> 0
+                        url.contains(".m3u", ignoreCase = true) -> 1
+                        else -> 2
+                    }
+                }
+                .take(8)
+
+            for (request in candidates) {
+                val candidateUrl = request.url.toString()
+                val requestHeaders = request.headers.toMap().filterKeys { key ->
+                    !key.equals("Host", ignoreCase = true) &&
+                    !key.equals("Connection", ignoreCase = true) &&
+                    !key.equals("Content-Length", ignoreCase = true) &&
+                    !key.equals("Accept-Encoding", ignoreCase = true) &&
+                    !key.startsWith("Sec-Fetch-", ignoreCase = true) &&
+                    !key.startsWith("Sec-CH-", ignoreCase = true)
+                }
+                val actualReferer = request.header("Referer")?.takeIf { it.isNotBlank() } ?: lastPageUrl
+                val streamHost = FilmmakinesiParsing.hostOf(candidateUrl)
+                // WebResourceRequest.requestHeaders can omit Cookie; read the
+                // URL-specific WebView cookie jar without logging its contents.
+                val webViewCookie = try {
+                    android.webkit.CookieManager.getInstance().getCookie(candidateUrl)
+                } catch (_: Exception) {
+                    null
+                }
+                val playbackRequestHeaders = mergeStreamHeaders(
+                    requestHeaders,
+                    webViewCookie?.takeIf { it.isNotBlank() }?.let { mapOf("Cookie" to it) } ?: emptyMap()
+                )
+                val candidateHeaders = mergeStreamHeaders(
+                    mapOf("Referer" to actualReferer, "Origin" to "https://$streamHost"),
+                    headers["User-Agent"]?.takeIf { it.isNotBlank() }?.let { mapOf("User-Agent" to it) } ?: emptyMap(),
+                    playbackRequestHeaders
+                )
+
+                val probe = try {
+                    app.get(candidateUrl, headers = candidateHeaders)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+                val manifestText = probe?.text?.removePrefix("\uFEFF")?.trimStart().orEmpty()
+                if (probe != null && probe.isSuccessful && manifestText.startsWith("#EXTM3U")) {
+                    Log.i(TAG, "WebView geçerli HLS manifesti yakaladı (host=$streamHost)")
+                    if (emitStreams(listOf(candidateUrl), playerUrl, actualReferer, callback, playbackRequestHeaders, manifestValidated = true)) return true
+                } else {
+                    val status = probe?.code ?: -1
+                    Log.w(TAG, "WebView manifest adayı geçersiz (HTTP=$status, host=$streamHost)")
+                }
+            }
+
+            if (candidates.isEmpty()) {
+                Log.w(TAG, "WebView medya isteği yakalayamadı, host=" + FilmmakinesiParsing.hostOf(playerUrl))
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "WebView fallback başarısız (" + error.javaClass.simpleName + "), host=" + FilmmakinesiParsing.hostOf(playerUrl))
+        }
+
         // Teshis: embed HTML'inin basini logla (sitenin yeni oyuncusunun
         // yapisini bir sonraki logcat'te gormek icin). 300 yerine 2000
         // karakter: interstitial'lerde asil ipucu head/script bolumunde.
@@ -401,61 +533,45 @@ class FilmmakinesiProvider : MainAPI() {
         streams: List<String>,
         playerUrl: String,
         referer: String,
-        callback: (ExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit,
+        capturedHeaders: Map<String, String> = emptyMap(),
+        manifestValidated: Boolean = false
     ): Boolean {
         var emitted = false
         for (streamUrl in streams) {
-            // Her CDN icin kendi Origin degerini kullan; ilk stream'in host'unu
-            // tum alternatiflere uygulamak bazi kaynaklarda 403 uretebilir.
             val streamHost = FilmmakinesiParsing.hostOf(streamUrl)
                 .ifBlank { FilmmakinesiParsing.hostOf(playerUrl) }
             val origin = "https://" + streamHost
-            // DUZELTME: HLS karari artik yalnizca ".m3u8" uzantisina
-            // dayanmiyor; manifest'ler "/master.", "/index." ve "/hls/"
-            // path'leriyle de sunulabiliyor (or.
-            // hls*.playmix.uno/hls/...mp4/master.txt). Uzantisina bakip
-            // yanlis siniflandirilan manifestler progressive VIDEO ile
-            // acilmaya calisilip HTTP 404 aliyordu.
+            val playbackHeaders = mergeStreamHeaders(
+                mapOf("Referer" to referer, "Origin" to origin),
+                headers["User-Agent"]?.takeIf { it.isNotBlank() }?.let { mapOf("User-Agent" to it) } ?: emptyMap(),
+                capturedHeaders
+            )
+            val playbackReferer = playbackHeaders.entries
+                .firstOrNull { it.key.equals("Referer", ignoreCase = true) }
+                ?.value ?: referer
+
             if (FilmmakinesiParsing.isLikelyHls(streamUrl)) {
-                // ".txt" uzantili manifest'ler statik yer tutucu (decoy)
-                // olabiliyor: logcat'te uc farkli filmde ayni playmix
-                // token'i dondu ve M3u8Helper icerigi playlist olmadigini
-                // reddetti. Yayindan once ucuz bir HEAD ile 404/410
-                // kontrolu yap; canli degilse hic link uretme.
-                if (streamUrl.substringBefore("?").endsWith(".txt", ignoreCase = true)) {
-                    // DUZELTME (logcat 2026-10-22 10:46): Yanit yalnizca
-                    // .code icin acilip kapatilmadigi icin okhttp
-                    // "response.body().close()" uyarisi veriyordu; her yem
-                    // kontrolu bir baglanti sizdiriyordu. okhttpResponse
-                    // Closeable oldugu icin use bloguyla garanti kapatin.
+                // .txt uçları bazen artık var olmayan decoy manifestlerdir.
+                // HTTP yanıtını kapatmayı garanti et ve 404/410 bağlantıları ele.
+                if (!manifestValidated && streamUrl.substringBefore("?").endsWith(".txt", ignoreCase = true)) {
                     val headCode = try {
-                        app.head(
-                            streamUrl,
-                            headers = mapOf(
-                                "Referer" to referer,
-                                "Origin" to origin,
-                                "User-Agent" to (headers["User-Agent"] ?: "")
-                            )
-                        ).okhttpResponse.use { it.code }
+                        app.head(streamUrl, headers = playbackHeaders).okhttpResponse.use { it.code }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
-                    } catch (error: Exception) {
+                    } catch (_: Exception) {
                         -1
                     }
                     if (headCode == 404 || headCode == 410) {
-                        Log.w(TAG, "Manifest kapali (HTTP " + headCode + "), host=" + FilmmakinesiParsing.hostOf(streamUrl))
+                        Log.w(TAG, "Manifest kapalı (HTTP " + headCode + "), host=" + streamHost)
                         continue
                     }
                 }
                 val links = M3u8Helper.generateM3u8(
                     source = name,
                     streamUrl = streamUrl,
-                    referer = referer,
-                    headers = mapOf(
-                        "Referer" to referer,
-                        "Origin" to origin,
-                        "User-Agent" to (headers["User-Agent"] ?: "")
-                    ),
+                    referer = playbackReferer,
+                    headers = playbackHeaders,
                     name = "FM " + FilmmakinesiParsing.playerLabel(playerUrl)
                 )
                 for (link in links) {
@@ -463,7 +579,6 @@ class FilmmakinesiProvider : MainAPI() {
                     emitted = true
                 }
             } else {
-                // Progressive mp4 (veya diger dogrudan video)
                 callback(
                     newExtractorLink(
                         source = name,
@@ -471,13 +586,29 @@ class FilmmakinesiProvider : MainAPI() {
                         url = streamUrl,
                         type = ExtractorLinkType.VIDEO
                     ) {
-                        this.referer = referer
+                        this.referer = playbackReferer
+                        this.headers = playbackHeaders
                     }
                 )
                 emitted = true
             }
         }
         return emitted
+    }
+
+    /** Merge HTTP headers case-insensitively so captured browser values win. */
+    private fun mergeStreamHeaders(vararg maps: Map<String, String>): Map<String, String> {
+        val merged = linkedMapOf<String, String>()
+        for (map in maps) {
+            for ((key, value) in map) {
+                if (value.isNotBlank()) {
+                    val existing = merged.keys.firstOrNull { it.equals(key, ignoreCase = true) }
+                    if (existing != null) merged.remove(existing)
+                    merged[key] = value
+                }
+            }
+        }
+        return merged
     }
 
     private suspend fun getDoc(url: String): Document {
