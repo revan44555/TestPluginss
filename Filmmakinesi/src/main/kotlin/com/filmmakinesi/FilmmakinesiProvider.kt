@@ -156,7 +156,7 @@ class FilmmakinesiProvider : MainAPI() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "Arama rotasi acilamadi (" + error.javaClass.simpleName + ")")
+                Log.w(TAG, "Arama rotasi acilamadi (" + error.javaClass.simpleName + "): " + (error.message ?: "ayrinti yok").take(180))
                 continue
             }
 
@@ -178,7 +178,7 @@ class FilmmakinesiProvider : MainAPI() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "Arsiv arama sayfasi acilamadi (" + error.javaClass.simpleName + ")")
+                Log.w(TAG, "Arsiv arama sayfasi acilamadi (" + error.javaClass.simpleName + "): " + (error.message ?: "ayrinti yok").take(180))
                 continue
             }
             val matching = parseFilmCards(doc).filter {
@@ -388,6 +388,10 @@ class FilmmakinesiProvider : MainAPI() {
             TAG,
             "Embed teshisi: HTTP=$lastStatus, bytes=${lastRaw.length}, host=${FilmmakinesiParsing.hostOf(playerUrl)}, markers=$markers"
         )
+        // Player is intentionally summarized, not dumped: signed URLs, tokens, and long literals are masked.
+        FilmmakinesiParsing.obfuscationRegionSnippet(lastRaw)?.let { snippet ->
+            Log.w(TAG, "Embed JS yapisi (degerler maskeli): " + snippet)
+        }
         Log.w(TAG, "Embed sayfasinda oynatilabilir akis bulunamadi (host=" + FilmmakinesiParsing.hostOf(playerUrl) + ")")
         return false
     }
