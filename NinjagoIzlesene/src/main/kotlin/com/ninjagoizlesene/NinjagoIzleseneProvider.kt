@@ -10,6 +10,7 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import android.util.Log
 import java.util.concurrent.CancellationException
+import java.net.URI
 
 class NinjagoIzleseneProvider : MainAPI() {
     override var mainUrl = "https://ninjagoizlesene.com.tr"
@@ -36,6 +37,34 @@ class NinjagoIzleseneProvider : MainAPI() {
         "Accept-Language" to "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
         "Referer" to "$mainUrl/"
     )
+
+    // Known advertising hosts must not make a content page look playable.
+    private val adIframeHosts = setOf(
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "googletagservices.com",
+        "adnxs.com",
+        "taboola.com",
+        "outbrain.com",
+        "exoclick.com",
+        "popads.net",
+        "propellerads.com",
+        "trafficjunky.com",
+        "adsterra.com",
+        "adskeeper.co.uk"
+    )
+
+    internal fun isCandidatePlayerIframe(iframe: Element): Boolean {
+        val raw = iframe.attr("data-src").trim()
+            .takeIf { it.isNotBlank() && !it.equals("about:blank", ignoreCase = true) }
+            ?: iframe.attr("src").trim()
+                .takeIf { it.isNotBlank() && !it.equals("about:blank", ignoreCase = true) }
+            ?: return false
+        if (raw.startsWith("javascript:", ignoreCase = true)) return false
+        val host = runCatching { URI(fixUrl(raw)).host?.lowercase() }.getOrNull() ?: return false
+        return adIframeHosts.none { host == it || host.endsWith(".$it") }
+    }
 
     // ---------------------------------------------------------------
     // Dzen.ru (Yandex Zen) çözücüsü — DOKUNULMADI
@@ -531,13 +560,10 @@ class NinjagoIzleseneProvider : MainAPI() {
         var doc = app.get(pageUrl, headers = headers).document
 
         fun pageHasPlayableContent(document: org.jsoup.nodes.Document): Boolean {
-            val hasIframe = document.select("iframe").any {
-                val src = it.attr("src").trim()
-                val dataSrc = it.attr("data-src").trim()
-                (src.isNotBlank() && src != "about:blank") ||
-                    (dataSrc.isNotBlank() && dataSrc != "about:blank")
+            val hasIframe = document.select("iframe").any { isCandidatePlayerIframe(it) }
+            val hasVideoTag = document.select("video[src], source[src]").any {
+                it.attr("src").trim().isNotBlank()
             }
-            val hasVideoTag = document.select("video[src], source[src]").isNotEmpty()
             return hasIframe || hasVideoTag
         }
         val path = pageUrl.substringAfter(mainUrl).trim('/')
