@@ -120,7 +120,9 @@ class FilmmakinesiProvider : MainAPI() {
             }
         }
         if (sections.isEmpty()) return null
-        return HomePageResponse(
+        // Dogrudan HomePageResponse yapicisi yerine MainAPI fabrikasi:
+        // derlendigi CloudStream surumune gore dogru cagriyi icra eder.
+        return newHomePageResponse(
             sections.map { (name, items) -> HomePageList(name, items) },
             hasNext = false
         )
@@ -428,7 +430,7 @@ class FilmmakinesiProvider : MainAPI() {
         return response.document
     }
 
-    private fun parseFilmCards(doc: Document): List<SearchResponse> {
+    private fun parseFilmCards(doc: Element): List<SearchResponse> {
         val seen = LinkedHashSet<String>()
         val out = mutableListOf<SearchResponse>()
         for (anchor in doc.select("a[href]")) {
