@@ -1,5 +1,5 @@
 // Increment this when playback behavior changes; CloudStream uses it for plugin updates.
-version = 7
+version = 8
 
 android {
     namespace = "com.filmmakinesi"
