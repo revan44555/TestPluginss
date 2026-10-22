@@ -3,7 +3,9 @@ package com.filmmakinesi
 import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
@@ -163,31 +165,54 @@ class FilmmakinesiProvider : MainAPI() {
             return false
         }
         val raw = FilmmakinesiParsing.normalizeEscaped(response.text)
-        val manifest = FilmmakinesiParsing.extractM3u8(raw)
-        if (manifest == null) {
-            Log.w(TAG, "Embed sayfasinda m3u8 bulunamadi: " + playerUrl)
+        val streams = FilmmakinesiParsing.extractStreamUrls(raw)
+        if (streams.isEmpty()) {
+            // Teshis: embed HTML'inin basini logla (bir sonraki logcat'te
+            // sitenin yeni oyuncusunun yapisini gormek icin)
+            Log.w(TAG, "Embed HTML basi (" + raw.length + " bayt): " +
+                raw.take(300).replace(Regex("\\s+"), " "))
+            Log.w(TAG, "Embed sayfasinda akis bulunamadi: " + playerUrl)
             return false
         }
 
         val origin = runCatching {
-            "https://" + FilmmakinesiParsing.hostOf(manifest)
+            "https://" + FilmmakinesiParsing.hostOf(streams.first())
         }.getOrDefault("https://" + FilmmakinesiParsing.hostOf(playerUrl))
 
-        val links = M3u8Helper.generateM3u8(
-            source = name,
-            streamUrl = manifest,
-            referer = referer,
-            headers = mapOf(
-                "Referer" to referer,
-                "Origin" to origin,
-                "User-Agent" to (headers["User-Agent"] ?: "")
-            ),
-            name = "FM " + FilmmakinesiParsing.playerLabel(playerUrl)
-        )
         var emitted = false
-        for (link in links) {
-            callback(link)
-            emitted = true
+        for (streamUrl in streams) {
+            val isHls = streamUrl.substringBefore("?")
+                .endsWith(".m3u8", ignoreCase = true)
+            if (isHls) {
+                val links = M3u8Helper.generateM3u8(
+                    source = name,
+                    streamUrl = streamUrl,
+                    referer = referer,
+                    headers = mapOf(
+                        "Referer" to referer,
+                        "Origin" to origin,
+                        "User-Agent" to (headers["User-Agent"] ?: "")
+                    ),
+                    name = "FM " + FilmmakinesiParsing.playerLabel(playerUrl)
+                )
+                for (link in links) {
+                    callback(link)
+                    emitted = true
+                }
+            } else {
+                // Progressive mp4 (veya diger dogrudan video)
+                callback(
+                    newExtractorLink(
+                        source = name,
+                        name = "FM " + FilmmakinesiParsing.playerLabel(playerUrl),
+                        url = streamUrl,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = referer
+                    }
+                )
+                emitted = true
+            }
         }
         return emitted
     }
