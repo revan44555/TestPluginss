@@ -8,8 +8,6 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import java.util.concurrent.CancellationException
 
 /**
