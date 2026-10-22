@@ -37,19 +37,32 @@ fun Project.android(
     .getByName<BaseExtension>("android")
     .configuration()
 
+// CI'da GITHUB_REPOSITORY "kullanici/depo" bicimindedir; yerel derlemelerde
+// yer tutucu kalir (eskiden de oyleydi).
+val repoPath = (System.getenv("GITHUB_REPOSITORY") ?: "user/repo")
+    .trim().removePrefix("/").removeSuffix("/")
+val repoUser = repoPath.substringBefore("/")
+val repoName = repoPath.substringAfter("/")
+
 subprojects {
     apply(plugin = "com.android.library")
     apply(plugin = "kotlin-android")
     apply(plugin = "com.lagradost.cloudstream3.gradle")
 
     cloudstream {
+        // DUZELTME: rawLinkFormat icin "builds/" oneki eklendi.
+        // Eski setRepo(repoPath) cagrasi GitHub sablonunu
+        // ".../%branch%/%filename%" olarak kullaniyordu; buildBranch="master"
+        // ile bu ".../master/Filmmakinesi.cs3" uretiyor ama workflow ikilileri
+        // builds/ klasorune koydugu icin URL 404 doneyordu.
         setRepo(
-            System.getenv("GITHUB_REPOSITORY")
-                ?: "user/repo"
+            repoUser,
+            repoName,
+            "https://github.com/$repoUser/$repoName",
+            "https://raw.githubusercontent.com/$repoUser/$repoName/%branch%/builds/%filename%"
         )
-        // Tek dal (master) kullanimi: plugins.json icindeki indirme
-        // URL'leri raw.githubusercontent.com/.../master/... olarak
-        // uretilsin. Varsayilan "builds" dali bu depoda yok.
+        // Tek dal (master) kullanimi: indirme URL'leri raw.githubusercontent
+        // uzerinden master dalindaki builds/ klasorune isaret etsin.
         buildBranch = "master"
     }
 
