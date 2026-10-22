@@ -93,6 +93,7 @@ internal object FilmmakinesiParsing {
         Regex("""["'][^"'\n]{0,160}["']""")
     private val identifierPattern =
         Regex("""^[A-Za-z_$][\w$]*$""")
+    private val packedTokenPattern = Regex("""[A-Za-z0-9]+""")
 
     // ---------------------------------------------------------------
     // "Yavas ag" interstitial'i gibi araci sayfalardan yonlendirme cikarma
@@ -384,19 +385,37 @@ internal object FilmmakinesiParsing {
             val count = match.groupValues[3].toInt()
             val dictionary = unescapeJsString(match.groupValues[4]).split('|')
 
-            var out = payload
-            var i = count - 1
-            while (i >= 0) {
-                val word = dictionary.getOrNull(i).orEmpty()
-                if (word.isNotEmpty()) {
-                    val key = toBase(i, radix)
-                    out = out.replace(Regex("""\b""" + Regex.escape(key) + """\b"""), word)
-                }
-                i--
+            // Older implementation compiled one regex and copied the entire
+            // payload for every dictionary word. On modern, large player bundles
+            // this caused sustained allocation/GC churn before WebView playback.
+            // Bound hostile/oversized inputs and replace tokens in a single pass.
+            require(radix in 2..62 && count in 0..4096 && payload.length <= 200_000)
+            val replacements = HashMap<String, String>(minOf(count, dictionary.size))
+            for (i in (minOf(count, dictionary.size) - 1) downTo 0) {
+                val word = dictionary[i]
+                if (word.isNotEmpty()) replacements[toBase(i, radix)] = word
             }
-            out
+            val out = StringBuilder(payload.length)
+            var cursor = 0
+            for (token in packedTokenPattern.findAll(payload)) {
+                val start = token.range.first
+                val end = token.range.last + 1
+                val leftBoundary = start == 0 || !isRegexWord(payload[start - 1])
+                val rightBoundary = end == payload.length || !isRegexWord(payload[end])
+                val decoded = if (leftBoundary && rightBoundary) replacements[token.value] else null
+                if (decoded != null) {
+                    out.append(payload, cursor, start)
+                    out.append(decoded)
+                    cursor = end
+                }
+            }
+            out.append(payload, cursor, payload.length)
+            out.toString()
         }.getOrNull()
     }
+
+    private fun isRegexWord(char: Char): Boolean =
+        char == '_' || char in '0'..'9' || char in 'a'..'z' || char in 'A'..'Z'
 
     /**
      * Decode safe, literal-only String.fromCharCode calls commonly used by obfuscated players.
