@@ -1,3 +1,4 @@
+// Increment this when playback behavior changes; CloudStream uses it for plugin updates.
 version = 6
 
 android {
