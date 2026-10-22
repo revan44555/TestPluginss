@@ -75,6 +75,7 @@ jobs:
 
             python3 - "$preserve_dir/plugins.json" "$GITHUB_WORKSPACE/builds/plugins.json" <<'PY'
           import json
+          import os
           import sys
 
           with open(sys.argv[1], "r", encoding="utf-8") as file:
@@ -88,6 +89,17 @@ jobs:
           )
           if original_ninjago is None:
               raise SystemExit("Refusing to publish: previous NinjagoIzlesene registry entry is missing")
+
+          # DUZELTME: donmus kayit eski (bozuk) URL semasiyla kaydedilmis
+          # olabilir; ikili builds/ altinda oldugu icin URL'nin de oyle
+          # uretildiginden emin ol. fileHash/binary degismez.
+          repository = os.environ.get("GITHUB_REPOSITORY", "")
+          if repository:
+              original_ninjago["url"] = (
+                  "https://raw.githubusercontent.com/"
+                  + repository
+                  + "/master/builds/NinjagoIzlesene.cs3"
+              )
 
           found = False
           for index, entry in enumerate(rebuilt):
