@@ -1,7 +1,6 @@
 package com.filmmakinesi
 
 import android.util.Log
-import kotlinx.coroutines.delay
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -326,8 +325,8 @@ class FilmmakinesiProvider : MainAPI() {
         // 4) Interstitial cookie set edip ayni URL'yi yeniden yukluyor
         // olabilir; tek seferlik kisa bekleyisle son kez dene.
         if (lastRaw.isNotEmpty() && !followedRedirect) {
-            // Non-blocking bekleme: suspend is parcaciginin calistigi thread'i tutma.
-            delay(800L)
+            // OkHttp yanittaki Set-Cookie basliklarini cevap donmeden once isler;
+            // sunucu tarafli cookie icin bloklayan/artificial gecikme gerekmiyor.
             val retry = try {
                 app.get(playerUrl, headers = headers + mapOf("Referer" to referer))
             } catch (cancelled: CancellationException) {
