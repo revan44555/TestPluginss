@@ -81,9 +81,13 @@ class FilmmakinesiProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val doc = getDoc(url)
+        // DUZELTME: Baslik hic bulunamazsa IllegalStateException firlatici
+        // kod vardi; bu, CloudStream tarafinda hata/cokus olarak
+        // goruntuleniyordu. Artik URL slug'indan turetilmis guvenli bir
+        // geri dusus (fallback) baslik kullaniliyor.
         val title = doc.selectFirst("h1")?.text()?.trim()
             ?: doc.selectFirst("meta[property=og:title]")?.attr("content")?.trim()
-            ?: throw IllegalStateException("Baslik bulunamadi")
+            ?: titleFromUrl(url)
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
             ?.let { FilmmakinesiParsing.safeAbsoluteUrl(it, mainUrl) }
         val plot = doc.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
@@ -93,7 +97,9 @@ class FilmmakinesiProvider : MainAPI() {
         return newMovieLoadResponse(title, url, TvType.Movie, url) {
             this.posterUrl = poster
             this.plot = plot
-            this.year = FilmmakinesiParsing.extractYear(infoText)
+            // DUZELTME: Once metindeki ilk yil aliniyordu; artik once URL
+            // slug'indaki "-YYYY/" kalibi deneniyor, o yoksa metne dusuluyor.
+            this.year = FilmmakinesiParsing.extractYear(infoText, url)
             FilmmakinesiParsing.extractImdb(infoText)?.let { this.score = Score.from10(it) }
         }
     }
@@ -213,11 +219,29 @@ class FilmmakinesiProvider : MainAPI() {
             val cardText = card?.text().orEmpty()
             out.add(newMovieSearchResponse(title, url, TvType.Movie) {
                 this.posterUrl = img?.let { bestImage(it) }
-                this.year = FilmmakinesiParsing.extractYear(cardText)
+                // DUZELTME: Kart metnindeki ilk yil yerine once URL slug'i
+                // deneniyor (detay icin FilmmakinesiParsing.extractYear).
+                this.year = FilmmakinesiParsing.extractYear(cardText, url)
                 FilmmakinesiParsing.extractImdb(cardText)?.let { this.score = Score.from10(it) }
             })
         }
         return out
+    }
+
+    /**
+     * URL slug'indan gorunur bir baslik turetir (or. ".../film/disco-2026/"
+     * -> "Disco"). Yil eki ve kalici anlam tasimayan artik kelimeler
+     * dusurulur; hicbir sey cikmazsa "Film" geri dususunu dondurur.
+     */
+    private fun titleFromUrl(url: String): String {
+        val slug = url.trimEnd('/').substringAfterLast('/')
+        val words = slug.split("-")
+            .filter { it.isNotBlank() }
+            .filterNot { it.toIntOrNull() != null } // yil/numara eklerini at
+        if (words.isEmpty()) return "Film"
+        return words.joinToString(" ") { word ->
+            word.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+        }
     }
 
     private fun bestImage(img: Element): String? {

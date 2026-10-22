@@ -21,7 +21,17 @@ internal object FilmmakinesiParsing {
     private val m3u8Pattern =
         Regex("""(?i)(https?://[^\s"'<>\\]+\.m3u8[^\s"'<>\\]*)""")
     private val yearPattern = Regex("""\b(19|20)\d{2}\b""")
-    private val ratingPattern = Regex("""\b([0-9]\.[0-9])\b""")
+    // DUZELTME: Onceki desen metinde "imdb" kelimesi gecse bile HERHANGI
+    // bir x.y sayisini puan sanabiliyordu (or. "IMDB 7.5 2.5 saat" gibi
+    // bir metinde ilk eslesen sayi seciliyordu). Artik puan deseni yalnizca
+    // "imdb" kelimesine yapisik bolgeden (en fazla 15 ayirici karakter)
+    // araniyor; "/10" oneki varsa da tuketiliyor.
+    private val imdbPattern =
+        Regex("""(?i)imdb[\s:.\-]{0,15}?\b([0-9]\.[0-9])\b(?:\s*/\s*10)?""")
+    // DUZELTME: Film URL'lerindeki "...-2026/" bicimli yil onegi.
+    // Metin icindeki ilk yil yanlis olabilir (or. konu aciklamasinda
+    // gegen baska bir yil); URL slug'indaki "-YYYY" kalibi cok daha guvenilir.
+    private val slugYearPattern = Regex("""-(19|20)\d{2}(?:[/?#]|$)""")
 
     fun isFilmUrl(href: String): Boolean {
         if (href.startsWith("javascript:", ignoreCase = true)) return false
@@ -64,12 +74,23 @@ internal object FilmmakinesiParsing {
         return match.value.trimEnd('"', '\'', ';', ',')
     }
 
-    fun extractYear(text: String): Int? =
-        yearPattern.find(text)?.value?.toIntOrNull()
+    /**
+     * Yil cikarir. [urlHint] verilirse once oradaki "-YYYY/" kalibi
+     * denenir (film URL slug'lari genelde "...-2026/" bicimindedir);
+     * bulunamazsa metindeki ilk 19xx/20xx sayisina duser. Bu, konu
+     * metninin icinde gegen baglamsiz yillarin yanlis secilmesini azaltir.
+     */
+    fun extractYear(text: String, urlHint: String? = null): Int? {
+        urlHint?.let { hint ->
+            slugYearPattern.find(hint)?.let { match ->
+                match.value.removePrefix("-").take(4).toIntOrNull()?.let { return it }
+            }
+        }
+        return yearPattern.find(text)?.value?.toIntOrNull()
+    }
 
     fun extractImdb(text: String): Float? {
-        if (!text.contains("imdb", ignoreCase = true)) return null
-        val value = ratingPattern.find(text)?.groupValues?.get(1)?.toFloatOrNull()
+        val value = imdbPattern.find(text)?.groupValues?.get(1)?.toFloatOrNull()
             ?: return null
         return if (value in 0f..10f) value else null
     }
