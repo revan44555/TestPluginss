@@ -8,8 +8,6 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import java.util.concurrent.CancellationException
 
 /**
@@ -78,7 +76,7 @@ class FilmmakinesiProvider : MainAPI() {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            Log.w(TAG, "Liste sayfasi acilamadi (" + error.javaClass.simpleName + "): " + pageUrl)
+            Log.w(TAG, "Liste sayfasi acilamadi (" + error.javaClass.simpleName + "), host=" + FilmmakinesiParsing.hostOf(pageUrl))
             return newHomePageResponse(request.name, emptyList(), hasNext = false)
         }
         val items = parseFilmCards(doc)
@@ -148,16 +146,47 @@ class FilmmakinesiProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return emptyList()
-        val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name()).replace("+", "%20")
-        val doc = try {
-            getDoc("$mainUrl/?s=$encoded")
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            Log.w(TAG, "Arama sayfasi acilamadi (" + error.javaClass.simpleName + ")")
-            return emptyList()
+
+        // Site arayuzu artik /kesfet/ katalog aramasini da kullaniyor.
+        // Parametre/tema degisikliklerine karsi birkac arama rotasini dene;
+        // ana sayfa kartlarini arama sonucuymus gibi dondurme.
+        for (searchUrl in FilmmakinesiParsing.searchUrls(trimmed, mainUrl)) {
+            val doc = try {
+                getDoc(searchUrl)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Arama rotasi acilamadi (" + error.javaClass.simpleName + ")")
+                continue
+            }
+
+            val matching = parseFilmCards(doc).filter {
+                FilmmakinesiParsing.searchTitleMatches(trimmed, it.name)
+            }
+            if (matching.isNotEmpty()) return matching.distinctBy { it.url }
         }
-        return parseFilmCards(doc)
+
+        // Son guvenli geri dusus: film arsivinin ilk sayfalarinda baslik
+        // eslesmesi ara. Bu, sitede bulunan ama ana sayfa bolumlerinde
+        // listelenmeyen filmleri bulur; tum arsivi indirmemek icin sinirlidir.
+        val catalogBase = "$mainUrl/filmler-1/"
+        for (page in 1..5) {
+            val pageUrl = if (page == 1) catalogBase
+                else catalogBase.replace("/filmler-1/", "/filmler-$page/")
+            val doc = try {
+                getDoc(pageUrl)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Arsiv arama sayfasi acilamadi (" + error.javaClass.simpleName + ")")
+                continue
+            }
+            val matching = parseFilmCards(doc).filter {
+                FilmmakinesiParsing.searchTitleMatches(trimmed, it.name)
+            }
+            if (matching.isNotEmpty()) return matching.distinctBy { it.url }
+        }
+        return emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -211,7 +240,7 @@ class FilmmakinesiProvider : MainAPI() {
         }
 
         if (players.isEmpty()) {
-            Log.w(TAG, "Sayfada oynatici bulunamadi: " + data)
+            Log.w(TAG, "Sayfada oynatici bulunamadi, host=" + FilmmakinesiParsing.hostOf(data))
             return false
         }
 
@@ -224,11 +253,11 @@ class FilmmakinesiProvider : MainAPI() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "Oynatici cozulemedi (" + error.javaClass.simpleName + "): " + player)
+                Log.w(TAG, "Oynatici cozulemedi (" + error.javaClass.simpleName + "), host=" + FilmmakinesiParsing.hostOf(player))
             }
         }
         if (!found) {
-            Log.w(TAG, "Hicbir alternatif oynatilabilir kaynak vermedi: " + data)
+            Log.w(TAG, "Hicbir alternatif oynatilabilir kaynak vermedi, host=" + FilmmakinesiParsing.hostOf(data))
         }
         return found
     }
@@ -256,10 +285,11 @@ class FilmmakinesiProvider : MainAPI() {
         var currentUrl = playerUrl
         var lastRaw = ""
         var lastStatus = 0
+        var lastPageUrl = playerUrl
         var followedRedirect = false
 
-        repeat(3) { hop ->
-            if (!visited.add(currentUrl)) return@repeat
+        for (hop in 0 until 3) {
+            if (!visited.add(currentUrl)) break
             val response = try {
                 app.get(currentUrl, headers = headers + mapOf("Referer" to referer))
             } catch (cancelled: CancellationException) {
@@ -274,6 +304,7 @@ class FilmmakinesiProvider : MainAPI() {
                 return false
             }
             lastRaw = FilmmakinesiParsing.normalizeEscaped(response.text)
+            lastPageUrl = currentUrl
             val streams = FilmmakinesiParsing.extractStreamUrls(lastRaw)
             if (streams.isNotEmpty()) {
                 // DUZELTME (logcat 2026-10-22 10:46): Akis bulundugu halde
@@ -289,7 +320,7 @@ class FilmmakinesiProvider : MainAPI() {
                 .firstOrNull { it !in visited }
             if (next == null) {
                 // Yonlendirme yok: bu sayfa son durak (interstitial olabilir).
-                return@repeat
+                break
             }
             Log.i(TAG, "Embed yonlendirmesi takip ediliyor (adim " + (hop + 1) + ", host=" + FilmmakinesiParsing.hostOf(next) + ")")
             followedRedirect = true
@@ -300,11 +331,11 @@ class FilmmakinesiProvider : MainAPI() {
         //    ayri bir <script src> dosyasinda olabilir. Ayni host'daki
         //    script'leri tarayip akis ara (en fazla 4 dosya).
         if (lastRaw.isNotEmpty()) {
-            val scripts = FilmmakinesiParsing.extractScriptSrcs(lastRaw, playerUrl).take(4)
+            val scripts = FilmmakinesiParsing.extractScriptSrcs(lastRaw, lastPageUrl).take(4)
             for (script in scripts) {
                 if (!visited.add(script)) continue
                 val scriptResponse = try {
-                    app.get(script, headers = headers + mapOf("Referer" to currentUrl))
+                    app.get(script, headers = headers + mapOf("Referer" to lastPageUrl))
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
@@ -402,6 +433,8 @@ class FilmmakinesiProvider : MainAPI() {
                                 "User-Agent" to (headers["User-Agent"] ?: "")
                             )
                         ).okhttpResponse.use { it.code }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (error: Exception) {
                         -1
                     }
@@ -446,7 +479,7 @@ class FilmmakinesiProvider : MainAPI() {
     private suspend fun getDoc(url: String): Document {
         val response = app.get(url, headers = headers + mapOf("Referer" to mainUrl))
         if (!response.isSuccessful) {
-            throw IllegalStateException("HTTP " + response.code + ": " + url)
+            throw IllegalStateException("HTTP " + response.code + ", host=" + FilmmakinesiParsing.hostOf(url))
         }
         return response.document
     }
