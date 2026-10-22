@@ -78,7 +78,7 @@ class FilmmakinesiProvider : MainAPI() {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            Log.w(TAG, "Liste sayfasi acilamadi (" + error.javaClass.simpleName + "): " + pageUrl)
+            Log.w(TAG, "Liste sayfasi acilamadi (" + error.javaClass.simpleName + "), host=" + FilmmakinesiParsing.hostOf(pageUrl))
             return newHomePageResponse(request.name, emptyList(), hasNext = false)
         }
         val items = parseFilmCards(doc)
@@ -211,7 +211,7 @@ class FilmmakinesiProvider : MainAPI() {
         }
 
         if (players.isEmpty()) {
-            Log.w(TAG, "Sayfada oynatici bulunamadi: " + data)
+            Log.w(TAG, "Sayfada oynatici bulunamadi, host=" + FilmmakinesiParsing.hostOf(data))
             return false
         }
 
@@ -224,11 +224,11 @@ class FilmmakinesiProvider : MainAPI() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "Oynatici cozulemedi (" + error.javaClass.simpleName + "): " + player)
+                Log.w(TAG, "Oynatici cozulemedi (" + error.javaClass.simpleName + "), host=" + FilmmakinesiParsing.hostOf(player))
             }
         }
         if (!found) {
-            Log.w(TAG, "Hicbir alternatif oynatilabilir kaynak vermedi: " + data)
+            Log.w(TAG, "Hicbir alternatif oynatilabilir kaynak vermedi, host=" + FilmmakinesiParsing.hostOf(data))
         }
         return found
     }
@@ -258,8 +258,8 @@ class FilmmakinesiProvider : MainAPI() {
         var lastStatus = 0
         var followedRedirect = false
 
-        repeat(3) { hop ->
-            if (!visited.add(currentUrl)) return@repeat
+        for (hop in 0 until 3) {
+            if (!visited.add(currentUrl)) break
             val response = try {
                 app.get(currentUrl, headers = headers + mapOf("Referer" to referer))
             } catch (cancelled: CancellationException) {
@@ -289,7 +289,7 @@ class FilmmakinesiProvider : MainAPI() {
                 .firstOrNull { it !in visited }
             if (next == null) {
                 // Yonlendirme yok: bu sayfa son durak (interstitial olabilir).
-                return@repeat
+                break
             }
             Log.i(TAG, "Embed yonlendirmesi takip ediliyor (adim " + (hop + 1) + ", host=" + FilmmakinesiParsing.hostOf(next) + ")")
             followedRedirect = true
@@ -300,7 +300,7 @@ class FilmmakinesiProvider : MainAPI() {
         //    ayri bir <script src> dosyasinda olabilir. Ayni host'daki
         //    script'leri tarayip akis ara (en fazla 4 dosya).
         if (lastRaw.isNotEmpty()) {
-            val scripts = FilmmakinesiParsing.extractScriptSrcs(lastRaw, playerUrl).take(4)
+            val scripts = FilmmakinesiParsing.extractScriptSrcs(lastRaw, currentUrl).take(4)
             for (script in scripts) {
                 if (!visited.add(script)) continue
                 val scriptResponse = try {
@@ -402,6 +402,8 @@ class FilmmakinesiProvider : MainAPI() {
                                 "User-Agent" to (headers["User-Agent"] ?: "")
                             )
                         ).okhttpResponse.use { it.code }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (error: Exception) {
                         -1
                     }
@@ -446,7 +448,7 @@ class FilmmakinesiProvider : MainAPI() {
     private suspend fun getDoc(url: String): Document {
         val response = app.get(url, headers = headers + mapOf("Referer" to mainUrl))
         if (!response.isSuccessful) {
-            throw IllegalStateException("HTTP " + response.code + ": " + url)
+            throw IllegalStateException("HTTP " + response.code + ", host=" + FilmmakinesiParsing.hostOf(url))
         }
         return response.document
     }
