@@ -1,5 +1,12 @@
 name: Build
 
+# builds/ klasorunu master'a geri yazmak icerik YAZMA izni ister.
+# Kontrol: Settings -> Actions -> General -> Workflow permissions ->
+# "Read and write permissions" secili olmali. (Bu repo bir fork; bu ayar
+# kapaliysa push 403 ile reddedilir.)
+permissions:
+  contents: write
+
 concurrency:
   group: build
   cancel-in-progress: true
@@ -90,9 +97,9 @@ jobs:
           if original_ninjago is None:
               raise SystemExit("Refusing to publish: previous NinjagoIzlesene registry entry is missing")
 
-          # DUZELTME: donmus kayit eski (bozuk) URL semasiyla kaydedilmis
-          # olabilir; ikili builds/ altinda oldugu icin URL'nin de oyle
-          # uretildiginden emin ol. fileHash/binary degismez.
+          # Donmus kayit eski (bozuk) URL semasiyla kaydedilmis olabilir;
+          # ikili builds/ altinda oldugu icin URL'nin de oyle uretildiginden
+          # emin ol. fileHash/binary degismez.
           repository = os.environ.get("GITHUB_REPOSITORY", "")
           if repository:
               original_ninjago["url"] = (
@@ -124,7 +131,32 @@ jobs:
 
           git add builds
 
-          git diff --cached --quiet || \
-            git commit -m "Build $GITHUB_SHA"
+          if git diff --cached --quiet; then
+            echo "Yeni derleme cikmadi, push atlaniyor."
+            exit 0
+          fi
 
-          git push
+          git commit -m "Build $GITHUB_SHA"
+
+          # ASIL HATA BURADAYDI: CI calisirken web arayuzunden master'a yeni
+          # commit yuklenirse (or. hizli "Add files via upload" dizisi) duz
+          # push 'fetch first / non-fast-forward' reddi alir ve 1 sn icinde
+          # duser. Cozum: once uzaktaki en son commit'i rebase'le, sonra
+          # push'la. builds/ ciktilari genelde catismasiz rebase olur.
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+              git rebase --abort
+              echo "::warning::Rebase basarisiz (builds/ catismasi?), 5 sn sonra tekrar ($attempt/3)."
+              sleep 5
+              continue
+            fi
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "builds/ basariyla pushlandi (deneme $attempt/3)."
+              exit 0
+            fi
+            echo "::warning::Push reddedildi, 5 sn sonra yeniden denenecek ($attempt/3)."
+            sleep 5
+          done
+          echo "::error::Push 3 denemede de basarisiz. 'Push builds' adiminin logundaki git hata satirini kontrol et."
+          exit 1
