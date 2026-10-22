@@ -113,6 +113,36 @@ internal object FilmmakinesiParsing {
     private val jsAssignPattern =
         Regex("""(?i)(?<![\w$])(?:(?:window|top|self)\.)?location\.assign\(\s*["'](https?://[^"']+)["']""")
 
+    /** Build likely search routes used by current and legacy site themes. */
+    fun searchUrls(query: String, baseUrl: String): List<String> {
+        val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8").replace("+", "%20")
+        return listOf(
+            "$baseUrl/kesfet/?s=$encoded",
+            "$baseUrl/kesfet/?q=$encoded",
+            "$baseUrl/kesfet/?search=$encoded",
+            "$baseUrl/kesfet/?arama=$encoded",
+            "$baseUrl/?s=$encoded"
+        ).distinct()
+    }
+
+    /**
+     * Normalize accents and punctuation before comparing a requested title
+     * with catalog card titles (e.g. "Predator: Badlands" vs "Predator Badlands").
+     */
+    fun searchTitleMatches(query: String, title: String): Boolean {
+        fun normalize(value: String): String =
+            java.text.Normalizer.normalize(value.lowercase(java.util.Locale.ROOT), java.text.Normalizer.Form.NFD)
+                .replace(Regex("\\p{Mn}+"), "")
+                .replace(Regex("[^a-z0-9]+"), " ")
+                .trim()
+        val wanted = normalize(query)
+        val candidate = normalize(title)
+        if (wanted.isBlank() || candidate.isBlank()) return false
+        if (candidate.contains(wanted) || wanted.contains(candidate)) return true
+        val words = wanted.split(Regex("\\s+")).filter { it.length > 1 }
+        return words.isNotEmpty() && words.all { candidate.contains(it) }
+    }
+
     fun isFilmUrl(href: String): Boolean {
         if (href.startsWith("javascript:", ignoreCase = true)) return false
         val path = runCatching { java.net.URI(href).path }.getOrNull() ?: href
