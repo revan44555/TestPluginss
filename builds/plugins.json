@@ -1,6 +1,6 @@
 [
     {
-        "fileHash": "sha256-ff9841e62fc5315cf8a910d44402851ac5a8424dcf861628385f5c1352b9fa8a",
+        "fileHash": "sha256-280653e78b899759cc08799a8a030107168cdcd21ce614a7a34ef336d4dddbc5",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/revan44555/TestPluginss",
         "fileSize": 39914,
@@ -12,7 +12,7 @@
         "tvTypes": [
             "Movie"
         ],
-        "version": 2,
+        "version": 3,
         "internalName": "Filmmakinesi",
         "description": "FilmMakinesi Turkce film sitesi (beta)",
         "url": "https://raw.githubusercontent.com/revan44555/TestPluginss/master/builds/Filmmakinesi.cs3",
