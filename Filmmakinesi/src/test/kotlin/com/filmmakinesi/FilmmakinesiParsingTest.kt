@@ -417,4 +417,21 @@ class FilmmakinesiParsingTest {
         )
         assertTrue(urls.isEmpty())
     }
+
+    @Test
+    fun searchUrlsCoverCurrentAndLegacyRoutes() {
+        val urls = FilmmakinesiParsing.searchUrls("Predator Badlands", "https://filmmakinesi.to")
+        assertTrue(urls.any { it == "https://filmmakinesi.to/kesfet/?s=Predator%20Badlands" })
+        assertTrue(urls.any { it == "https://filmmakinesi.to/?s=Predator%20Badlands" })
+        assertEquals(urls.size, urls.distinct().size)
+    }
+
+    @Test
+    fun searchTitleMatchingIgnoresAccentsAndPunctuation() {
+        assertTrue(FilmmakinesiParsing.searchTitleMatches("Predator: Badlands", "Predator - Badlands"))
+        assertTrue(FilmmakinesiParsing.searchTitleMatches("Tenzing", "Tenzing"))
+        assertTrue(FilmmakinesiParsing.searchTitleMatches("Örümcek Adam", "Orumcek-Adam"))
+        assertFalse(FilmmakinesiParsing.searchTitleMatches("Tenzing", "Therapy Done Right"))
+    }
+
 }
