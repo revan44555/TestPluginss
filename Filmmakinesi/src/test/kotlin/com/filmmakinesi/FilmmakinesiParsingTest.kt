@@ -256,4 +256,99 @@ class FilmmakinesiParsingTest {
         assertFalse(FilmmakinesiParsing.isSkippedHomeSection("Son Filmler"))
         assertFalse(FilmmakinesiParsing.isSkippedHomeSection("Vizyondakiler"))
     }
+
+    // ---------------------------------------------------------------
+    // Logcat (2026-10-22 10:46) senaryosu: runtime atob + parca birlestirme
+    // Site akis URL'sini parcalara bolup degiskenlere atiyor, sonra
+    // "[p...].reverse().join('')" ile birlestirip atob() ile aciyor
+    // (log: "file:atob(file_link)").
+    // ---------------------------------------------------------------
+
+    private fun base64Of(value: String): String =
+        java.util.Base64.getEncoder().encodeToString(value.toByteArray())
+
+    @Test
+    fun reassemblesReversedFragmentArrayBase64Stream() {
+        // Cozulmus JS gorunumu:
+        //   var f0='sonParca';...;var file_link=[f0,f1,...].reverse().join('');
+        //   jwplayer('player').setup({sources:[{file:atob(file_link)}]});
+        val url = "https://hls8.playmix.uno/hls/filmakinesimp4-GERCEKTOKEN.mp4/master.m3u8?tok=AB"
+        val pieces = base64Of(url).chunked(6)
+        val reversed = pieces.reversed()
+        val vars = reversed.mapIndexed { i, p -> "var f$i='$p';" }.joinToString("")
+        val arrayExpr = "var file_link=[" +
+            reversed.indices.joinToString(",") { "f$it" } + "].reverse().join('');"
+        val page = "<script>$vars$arrayExpr " +
+            "jwplayer('player').setup({sources:[{file:atob(file_link)}]});</script>"
+        val urls = FilmmakinesiParsing.extractStreamUrls(page)
+        assertTrue(
+            "Parcali + ters + base64 akis URL'si cozulemeli",
+            urls.any { it.contains("filmakinesimp4-GERCEKTOKEN.mp4/master.m3u8") }
+        )
+    }
+
+    @Test
+    fun reassemblesFragmentsInsidePackedJs() {
+        // Packer icindeki parca birlestirme: once packer acilmali, sonra
+        // [rp5,end44].reverse().join('') birlestirilip atob ile acilmali.
+        // Sozluk indeksleri (radix 36, tek karakterli anahtarlar):
+        //   0:var 1:rp5 2:'c1' 3:end44 4:'c0' 5:file_link 6:atob 7:return 8:''
+        val url = "https://cdn.x.y/a.m3u8"
+        val b64 = base64Of(url)
+        val half = b64.length / 2
+        val c0 = b64.substring(0, half)
+        val c1 = b64.substring(half)
+        // Dizide [rp5,end44] var; reverse() sonrasi join = end44+rp5 = c0+c1 = b64.
+        // Sozlukte parca DEGERLERI gercek base64 yarimlari olmali.
+        val payload = "0 1=2;0 3=4;0 5=[1,3].reverse().join(8);7 6(5)"
+        val dict = "var|rp5|\\'" + c1 + "\\'|end44|\\'" + c0 +
+            "\\'|file_link|atob|return|\\'\\'"
+        val packed = "eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(" +
+            "new RegExp('\\\\b'+c+'\\\\b','g'),k[c]);return p}" +
+            "('" + payload + "',36,9,'" + dict + "'.split('|'),0,{}))"
+        val urls = FilmmakinesiParsing.extractStreamUrls(packed)
+        assertTrue("Packer icindeki parcali akis URL'si cozulemeli", urls.any { it == url })
+    }
+
+    @Test
+    fun decodesAtobWithConcatenatedFragments() {
+        // var file_link='parca1'+'parca2'; file:atob(file_link)
+        val url = "https://cdn.ornek.site/v/film.mp4"
+        val b64 = base64Of(url)
+        val mid = b64.length / 2
+        val page = "var file_link='" + b64.substring(0, mid) + "'+'" + b64.substring(mid) +
+            "';file:atob(file_link),sources:[{file:s7e}]"
+        val urls = FilmmakinesiParsing.extractStreamUrls(page)
+        assertTrue(
+            "Birlestirilmis parcalardan atob ile akis cozulemeli",
+            urls.any { it.contains("cdn.ornek.site/v/film.mp4") }
+        )
+    }
+
+    @Test
+    fun realTokenIsFoundEvenWhenDecoyManifestIsPresent() {
+        // Logdaki kritik durum: sayfa ayni anda olu yem (decoy) master.txt
+        // icerir ve gercek token parcalidir; yem, parca-birlestirmeyi
+        // engellememeli (katman kosulsuz calisir).
+        val decoy = "src:\"https://hls8.playmix.uno/hls/filmakinesimp4-f9gx1M12BwC.mp4/master.txt\""
+        val url = "https://hls9.playmix.uno/hls/filmakinesimp4-REELTOKEN.mp4/index.m3u8"
+        val pieces = base64Of(url).chunked(5).reversed()
+        val vars = pieces.mapIndexed { i, s -> "var q$i='$s';" }.joinToString("")
+        val arr = "var file_link=[" +
+            pieces.indices.joinToString(",") { "q$it" } + "].reverse().join('');"
+        val page = "$decoy <script>$vars$arr file:atob(file_link)</script>"
+        val urls = FilmmakinesiParsing.extractStreamUrls(page)
+        assertTrue(urls.any { it.contains("filmakinesimp4-REELTOKEN.mp4/index.m3u8") })
+        assertTrue("Yem manifest listelenmeye devam etmeli (HEAD ile elenir)", urls.any { it.endsWith("master.txt") })
+    }
+
+    @Test
+    fun reassemblyDoesNotFabricateStreamsFromPlainMarkup() {
+        // Yanlis pozitif korumasi: parca/atob icermediği halde ekstra
+        // URL uretilmemeli (mevcut deseni bozmamali).
+        val urls = FilmmakinesiParsing.extractStreamUrls(
+            "<html><body><div class='x' data-info='abc'>normal sayfa</div></body></html>"
+        )
+        assertTrue(urls.isEmpty())
+    }
 }
