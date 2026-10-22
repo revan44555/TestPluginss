@@ -175,7 +175,7 @@ class FilmmakinesiParsingTest {
 
     @Test
     fun decodesUrlSafeBase64WithoutPadding() {
-        val url = "https://cdn.x.y/hls/url-safe.m3u8?sig=URL_SAFE"
+        val url = "https://cdn.x.y/hls/url-safe.m3u8?sig=~~~"
         val encoded = java.util.Base64.getUrlEncoder().withoutPadding()
             .encodeToString(url.toByteArray(Charsets.UTF_8))
         val html = """<script>var src=atob("$encoded");</script>"""
