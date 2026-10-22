@@ -176,22 +176,51 @@ class NinjagoIzleseneProvider : MainAPI() {
     // hem arama için 10 dakikalık basit bir bellek önbelleği tutuyoruz;
     // her anahtar kelimede sayfayı yeniden indirmek gereksiz ağ trafiği
     // ve açılma gecikmesi yaratıyordu.
-    private val archiveCacheTtlMs = 10 * 60 * 1000L
-    private var archiveCacheTimeMs = 0L
-    private var archiveCacheItems: List<Pair<String, Element>> = emptyList()
+    //
+    // DUZELTME 1: Önbellek artık Jsoup Element referansları yerine hafif
+    // ArchiveItem veri sınıfları tutuyor. Eski kod parse edilmiş DOM
+    // ağacını 10 dakika boyunca bellekte canlı tutuyordu; başlık/poster/
+    // tür bilgisi tek seferde çıkarılıyor.
+    // DUZELTME 2: Okuma/yazma erişimi ortak bir kilit altına alındı.
+    // Eski mutable alanlara eşzamanlı coroutine erişimi yarış durumuna
+    // (race condition) açıktı.
+    private data class ArchiveItem(
+        val url: String,
+        val title: String,
+        val poster: String?,
+        val isMovie: Boolean
+    )
 
-    private suspend fun getArchiveItems(): List<Pair<String, Element>> {
+    private val archiveCacheTtlMs = 10 * 60 * 1000L
+    private val archiveCacheLock = Any()
+    private var archiveCacheTimeMs = 0L
+    private var archiveCacheItems: List<ArchiveItem> = emptyList()
+
+    private suspend fun getArchiveItems(): List<ArchiveItem> {
         val now = System.currentTimeMillis()
-        if (archiveCacheItems.isNotEmpty() &&
-            now - archiveCacheTimeMs < archiveCacheTtlMs
-        ) {
-            return archiveCacheItems
+        synchronized(archiveCacheLock) {
+            val cached = archiveCacheItems
+            if (cached.isNotEmpty() && now - archiveCacheTimeMs < archiveCacheTtlMs) {
+                return cached
+            }
         }
         val doc = app.get(archiveUrl, headers = headers).document
-        val items = collectSeriesLinks(doc)
-        archiveCacheItems = items
-        archiveCacheTimeMs = now
-        return items
+        val fresh = collectSeriesLinks(doc).map { (href, link) -> toArchiveItem(href, link) }
+        synchronized(archiveCacheLock) {
+            archiveCacheItems = fresh
+            archiveCacheTimeMs = System.currentTimeMillis()
+        }
+        return fresh
+    }
+
+    private fun toArchiveItem(href: String, link: Element): ArchiveItem {
+        val slug = href.substringAfter("/dizi/").trim('/')
+        return ArchiveItem(
+            url = href,
+            title = extractTitle(link, slug),
+            poster = extractPoster(link),
+            isMovie = slug in movieSlugs
+        )
     }
 
     // ---------------------------------------------------------------
@@ -283,18 +312,14 @@ class NinjagoIzleseneProvider : MainAPI() {
         }
     }
 
-    private fun toSearchResponse(href: String, link: Element): SearchResponse {
-        val slug = href.substringAfter("/dizi/").trim('/')
-        val title = extractTitle(link, slug)
-        val poster = extractPoster(link)
-        val type = if (slug in movieSlugs) TvType.Movie else TvType.TvSeries
-        return if (type == TvType.Movie) {
-            newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = poster
+    private fun toSearchResponse(item: ArchiveItem): SearchResponse {
+        return if (item.isMovie) {
+            newMovieSearchResponse(item.title, item.url, TvType.Movie) {
+                this.posterUrl = item.poster
             }
         } else {
-            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = poster
+            newTvSeriesSearchResponse(item.title, item.url, TvType.TvSeries) {
+                this.posterUrl = item.poster
             }
         }
     }
@@ -303,8 +328,7 @@ class NinjagoIzleseneProvider : MainAPI() {
     // Ana sayfa
     // ---------------------------------------------------------------
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val seriesLinks = getArchiveItems()
-        val items = seriesLinks.map { (href, link) -> toSearchResponse(href, link) }
+        val items = getArchiveItems().map { toSearchResponse(it) }
         return newHomePageResponse(request.name, items, hasNext = false)
     }
 
@@ -312,21 +336,20 @@ class NinjagoIzleseneProvider : MainAPI() {
     // Arama
     // ---------------------------------------------------------------
     override suspend fun search(query: String): List<SearchResponse> {
-        val seriesLinks = getArchiveItems()
+        val items = getArchiveItems()
         Log.d(
             "NinjagoIzlesene",
-            "search('$query'): arşivden ${seriesLinks.size} öğe taranıyor"
+            "search('$query'): arşivden ${items.size} öğe taranıyor"
         )
         if (query.isBlank()) {
-            return seriesLinks.map { (href, link) -> toSearchResponse(href, link) }
+            return items.map { toSearchResponse(it) }
         }
         val normalizedQuery = normalizeTr(query)
-        val filtered = seriesLinks.filter { (href, link) ->
-            val slug = href.substringAfter("/dizi/").trim('/')
-            val title = extractTitle(link, slug)
-            normalizeTr(title).contains(normalizedQuery)
-        }
-        return filtered.map { (href, link) -> toSearchResponse(href, link) }
+        // Önbellek artık başlığı önceden çıkardığı için her öğede
+        // tekrar DOM taraması yapılmıyor; salt dize eşleşmesi yeterli.
+        return items
+            .filter { item -> normalizeTr(item.title).contains(normalizedQuery) }
+            .map { toSearchResponse(it) }
     }
 
     private fun normalizeTr(text: String): String {
@@ -390,9 +413,14 @@ class NinjagoIzleseneProvider : MainAPI() {
     private fun extractEpisodes(doc: Document, pageUrl: String, slug: String): List<Episode> {
         val episodes = mutableListOf<Episode>()
         val seenEpisodes = HashSet<String>()
-        // Yalnızca URL şeklinden "bölüm" olduğu anlaşılan linkler için sezon
-        // başına artan sayaç tutuyoruz. Eski davranış (episodes.count{...}+1)
-        // karışık eşleşme türlerinde çift numara üretebiliyordu.
+        // URL şeklinden "bölüm" olduğu anlaşılamayan linkler için, doküman
+        // sırasında en son geçen "N. Sezon" başlığını izleyerek sezon
+        // tahmini yapıyoruz.
+        //
+        // DUZELTME: Eski kod bu geri dönüşlerin hepsini sezon 1'e yazıyordu;
+        // çok sezonlu sayfalarda bölümler tek sezonda gruplanıp yanlış
+        // numaralanıyordu. Artık sayfadaki "N. Sezon" başlıkları doküman
+        // sırasına göre takip ediliyor (bağlantı içindeki strong'lar hariç).
         val fallbackNumbers = HashMap<Int, Int>()
         val textSeasonEpisode = Regex(
             """(\d+)\s*\.?\s*Sezon\s+(\d+)\s*\.?\s*B[oö]l[uü]m""",
@@ -406,7 +434,26 @@ class NinjagoIzleseneProvider : MainAPI() {
             """(\d+)[^\d]+sezon[^\d]+(\d+)[^\d]+b[oö]l[uü]m""",
             RegexOption.IGNORE_CASE
         )
-        for (link in doc.select("a[href]")) {
+        val headingSeason = Regex(
+            """(\d+)\s*\.?\s*Sezon\b""",
+            RegexOption.IGNORE_CASE
+        )
+        var currentSeason = 1
+
+        for (element in doc.select("h1, h2, h3, h4, h5, h6, strong, a[href]")) {
+            if (element.tagName() != "a") {
+                // Bağlantının parçası olan strong'lar başlık sayılmaz; yoksa
+                // "2. Sezon 3. Bölüm" yazan bir bölüm bağlantısı yanlışlıkla
+                // sezon değiştirirdi.
+                val insideAnchor = element.parents().any { it.tagName() == "a" }
+                if (!insideAnchor) {
+                    headingSeason.find(element.text())?.let { match ->
+                        match.groupValues[1].toIntOrNull()?.let { currentSeason = it }
+                    }
+                }
+                continue
+            }
+            val link = element
             val rawHref = link.attr("href").trim()
             if (rawHref.isBlank()) continue
             val href = fixUrl(rawHref)
@@ -433,9 +480,9 @@ class NinjagoIzleseneProvider : MainAPI() {
                     episodeNumber = episodeOnlyMatch.groupValues[1].toInt()
                 }
                 isEpisodeLink(href, slug) -> {
-                    season = 1
-                    val next = (fallbackNumbers[1] ?: 0) + 1
-                    fallbackNumbers[1] = next
+                    season = currentSeason
+                    val next = (fallbackNumbers[currentSeason] ?: 0) + 1
+                    fallbackNumbers[currentSeason] = next
                     episodeNumber = next
                 }
                 else -> continue
