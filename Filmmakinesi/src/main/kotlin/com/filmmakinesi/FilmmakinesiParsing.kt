@@ -62,6 +62,14 @@ internal object FilmmakinesiParsing {
         """\}\('((?:\\.|[^'])*)',\s*(\d+),\s*(\d+),\s*'((?:\\.|[^'])*)'\.split\('\|'\)"""
     )
     private val base64TokenPattern = Regex("""\b([A-Za-z0-9+/]{20,}={0,2})\b""")
+    // The latest player pages also synthesize stream strings from numeric character codes.
+    // Only literal numeric arguments are decoded; arbitrary JavaScript is never executed.
+    private val fromCharCodePattern = Regex(
+        """(?is)(?:String\s*\.\s*fromCharCode|String\s*\[\s*["']fromCharCode["']\s*\])\s*\(([^)]{1,4096})\)"""
+    )
+    private val fromCharCodeApplyPattern = Regex(
+        """(?is)(?:String\s*\.\s*fromCharCode|String\s*\[\s*["']fromCharCode["']\s*\])\s*\.\s*apply\s*\(\s*(?:null|undefined)\s*,\s*\[([^\]]{1,4096})\]\s*\)"""
+    )
 
     // ---------------------------------------------------------------
     // Parca-birlestirme (runtime atob) cozucusu
@@ -161,12 +169,17 @@ internal object FilmmakinesiParsing {
      * cozulup ve base64 token'lar acilip desenler tekrar denenir.
      */
     fun extractStreamUrls(raw: String): List<String> {
-        val normalized = normalizeEscaped(raw)
         val found = LinkedHashSet<String>()
+        val candidates = ArrayList<String>()
+        val seenTexts = HashSet<String>()
+
+        fun enqueue(candidate: String?) {
+            if (candidate.isNullOrBlank() || candidate.length > 200_000) return
+            if (candidates.size < 64 && seenTexts.add(candidate)) candidates.add(candidate)
+        }
 
         fun collectFrom(text: String) {
-            // Siralama onemli: ".txt" manifest'leri mp4'dan once topla ki
-            // "...mp4/master.txt" iki kez farkli bicimde kaydedilmesin.
+            // .txt manifests must be collected before the .mp4 path prefix.
             for (match in playlistTxtPattern.findAll(text)) {
                 found.add(match.value.trimEnd('"', '\'', ';', ',', '\\'))
             }
@@ -178,73 +191,44 @@ internal object FilmmakinesiParsing {
             }
         }
 
-        // Tespit zinciri: dizgun metin -> parca-birlestirme -> packer cozumu
-        // -> base64 token'lar -> base64 icinde packer.
-        fun attempt(text: String) {
+        enqueue(normalizeEscaped(raw))
+        var index = 0
+        while (index < candidates.size && index < 64) {
+            val text = candidates[index++]
             collectFrom(text)
-            // Parca-birlestirme katmani KOSULSUZ calisir (logcat 2026-10-22
-            // 10:46): dizgun metinde yalnizca olu yem (decoy) manifest
-            // gorunse bile, parcali degiskenlerden derlenip atob ile
-            // acilan gercek token listeye eklenmeli; yem bu katmani
-            // engellememeli. Adaylar: packetten cikmis JS, dizgin metin ve
-            // ikisinin birlesimi (tanimlar farkli bolgelerde olabilir).
-            run {
-                val unpacked = unpackPackedJs(text)
-                val candidates = LinkedHashSet<String>()
-                unpacked?.let { candidates.addAll(reassembleFragmentedStreams(it)) }
-                candidates.addAll(reassembleFragmentedStreams(text))
-                unpacked?.let {
-                    candidates.addAll(reassembleFragmentedStreams(it + "\n" + text))
-                }
-                for (candidate in candidates) {
-                    collectFrom(candidate)
-                    tryDecodeBase64Text(candidate)?.let { collectFrom(it) }
-                    tryDecodeBase64Text(candidate.reversed())?.let { collectFrom(it) }
-                }
-            }
-            if (found.isEmpty()) {
-                // JS string birlestirme temizligi: "https:"+"//cdn..." -> https://cdn...
-                // (cozulmus kaynak kodda parcali string'ler tek URL'ye birlesir)
-                unpackPackedJs(text)?.let { collectFrom(it.replace("\"+\"", "")) }
-            }
-            if (found.isEmpty()) {
-                for (decoded in decodeBase64Tokens(text)) {
-                    collectFrom(decoded)
-                }
-            }
-            if (found.isEmpty()) {
-                // Son care: ham base64 icinde gomulu m3u8 olabilir
-                for (decoded in decodeBase64Tokens(text)) {
-                    val inner = unpackPackedJs(decoded)
-                    if (inner != null) collectFrom(inner)
-                }
-            }
-        }
 
-        attempt(normalized)
+            // Keep decoding even when a dead/stale manifest has already been found.
+            // Several player variants include a decoy URL next to the actual encoded URL.
+            val charDecoded = decodeFromCharCodeExpressions(text)
+            if (charDecoded != text) enqueue(charDecoded)
 
-        // NOT: Kosul "found.isEmpty()" DEGIL — sayfadaki statik yer
-        // tutucu (decoy) manifest ilk taramada bulunup burayi atlamamali;
-        // yoksa gercek token (parcali JS'te) hic aciga cikmaz.
-        run {
-            // DUZELTME (logcat 2026-10-22 09:26): rapid embed sayfasi bir
-            // JWPlayer kabugu ve akis URL'sini "https:"+"//cdn..." gibi
-            // PARCALI string birlestirme ile gizliyor; dizgun metinde
-            // hicbir desen eslesmiyor. Birlestirilmis kopya uzerinde tum
-            // zinciri bastan deneyerek gercek akis adresini aciga cikar.
-            val rejoined = normalized
+            // Static concatenation, packed JavaScript, and fragment-array reconstruction.
+            val rejoined = text
                 .replace("\"+\"", "")
                 .replace("'+'", "")
                 .replace("'\"+\"'", "")
-            if (rejoined != normalized) attempt(rejoined)
+            if (rejoined != text) enqueue(rejoined)
+
+            val unpacked = unpackPackedJs(text)
+            if (unpacked != null) {
+                enqueue(unpacked)
+                // The variable definitions and their join expression can be in different layers.
+                enqueue(unpacked + "\n" + text)
+            }
+            reassembleFragmentedStreams(text).take(48).forEach(::enqueue)
+
+            // Decode only base64 payloads that look like URLs or player/JS source.
+            decodeBase64Tokens(text).take(32).forEach(::enqueue)
+            tryDecodeBase64Text(text)
+                ?.takeIf { isInterestingDecodedText(it) }
+                ?.let(::enqueue)
         }
 
         val urls = found.toList()
-        // mp4 deseni artik path sinirinda kaldigi icin
-        // "...mp4/master.txt" gibi manifest URL'lerinin yalnizca "...mp4"
-        // on eki ayrica yakalaniyor; bu kopuk parcalari (baska bir bulusun
-        // on eki olanlari) listeden at ki oynatici olu URL denemesin.
-        return urls.filterNot { m -> urls.any { o -> o.length > m.length && o.startsWith(m) } }
+        // Remove truncated URL prefixes when a longer complete manifest URL exists.
+        return urls.filterNot { short ->
+            urls.any { longer -> longer.length > short.length && longer.startsWith(short) }
+        }
     }
 
     /**
@@ -354,6 +338,69 @@ internal object FilmmakinesiParsing {
     }
 
     /**
+     * Decode safe, literal-only String.fromCharCode calls commonly used by obfuscated players.
+     * Non-numeric expressions are left untouched; this intentionally does not execute JavaScript.
+     */
+    private fun decodeFromCharCodeExpressions(raw: String): String {
+        var current = raw
+        repeat(4) {
+            val withApply = fromCharCodeApplyPattern.replace(current) { match ->
+                decodeCharCodeArguments(match.groupValues[1])?.let(::quoteJsLiteral) ?: match.value
+            }
+            val next = fromCharCodePattern.replace(withApply) { match ->
+                decodeCharCodeArguments(match.groupValues[1])?.let(::quoteJsLiteral) ?: match.value
+            }
+            if (next == current) return current
+            current = next
+        }
+        return current
+    }
+
+    private fun decodeCharCodeArguments(raw: String): String? {
+        var source = raw.trim()
+        if (source.startsWith("...")) source = source.substring(3).trim()
+        if (source.startsWith("[") && source.endsWith("]")) {
+            source = source.substring(1, source.length - 1).trim()
+        }
+        if (source.isEmpty()) return null
+        val tokens = source.split(',')
+        if (tokens.isEmpty() || tokens.size > 2048) return null
+        val codes = tokens.map { token -> parseCharCode(token) ?: return null }
+        return buildString(codes.size) {
+            for (code in codes) append((code and 0xFFFF).toChar())
+        }
+    }
+
+    private fun parseCharCode(raw: String): Int? {
+        val token = raw.trim().removeSurrounding("(", ")").trim().removePrefix("+")
+        if (token.matches(Regex("""-?0[xX][0-9a-fA-F]{1,8}"""))) {
+            val negative = token.startsWith("-")
+            val hex = token.removePrefix("-").drop(2).toLongOrNull(16) ?: return null
+            val signed = if (negative) -hex else hex
+            return signed.toInt()
+        }
+        if (token.matches(Regex("""-?\d{1,10}"""))) {
+            val value = token.toLongOrNull() ?: return null
+            if (value !in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) return null
+            return value.toInt()
+        }
+        return null
+    }
+
+    private fun quoteJsLiteral(value: String): String =
+        "\"" + value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r") + "\""
+
+    private fun isInterestingDecodedText(text: String): Boolean =
+        text.startsWith("http://", ignoreCase = true) ||
+            text.startsWith("https://", ignoreCase = true) ||
+            listOf(".m3u8", ".mp4", "jwplayer", "file_link", "fromCharCode", "atob(", "eval(")
+                .any { text.contains(it, ignoreCase = true) }
+
+    /**
      * Metindeki gozle gorulur base64 token'lari cozer ve iclerinden
      * akis URL'si icerenleri dondurur (atob("...") deseni de bu kapsamda,
      * cunku atob icindeki string ayni zamanda duz token olarak da gorunur).
@@ -365,7 +412,7 @@ internal object FilmmakinesiParsing {
                 ?: continue
             val asString = runCatching { String(decoded, Charsets.UTF_8) }.getOrNull()
                 ?: continue
-            if (asString.startsWith("http") || asString.contains(".m3u8") || asString.contains(".mp4")) {
+            if (isInterestingDecodedText(asString)) {
                 out.add(asString)
             }
         }
