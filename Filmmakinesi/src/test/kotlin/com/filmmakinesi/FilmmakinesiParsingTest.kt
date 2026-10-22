@@ -121,7 +121,7 @@ class FilmmakinesiParsingTest {
     fun unpacksDeanEdwardsPackerAndFindsStream() {
         val packed = "eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(" +
             "new RegExp('\\\\b'+c+'\\\\b','g'),k[c]);return p}" +
-            "('0 1 2',62,3,'var|source|"https:"+"//cdn.x.y/"+"film"+".m3u8?token=xyz";|'." +
+            "('0 1 2',62,3,'var|source|\"https:\"+\"//cdn.x.y/\"+\"film\"+\".m3u8?token=xyz\";|'." +
             "split('|'),0,{}))"
         val urls = FilmmakinesiParsing.extractStreamUrls(packed)
         assertTrue(urls.any { it.contains("cdn.x.y/film.m3u8") })
