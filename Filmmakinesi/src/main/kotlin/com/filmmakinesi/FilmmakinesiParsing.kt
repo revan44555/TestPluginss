@@ -138,7 +138,7 @@ internal object FilmmakinesiParsing {
         val wanted = normalize(query)
         val candidate = normalize(title)
         if (wanted.isBlank() || candidate.isBlank()) return false
-        if (candidate.contains(wanted) || wanted.contains(candidate)) return true
+        if (candidate.contains(wanted)) return true
         val words = wanted.split(Regex("\\s+")).filter { it.length > 1 }
         return words.isNotEmpty() && words.all { candidate.contains(it) }
     }
