@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.delay
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
@@ -154,36 +155,111 @@ class FilmmakinesiProvider : MainAPI() {
         return found
     }
 
+    /**
+     * Tek bir oyuncu embed'ini cozer. Iki katmanli strateji:
+     *
+     * 1) Yonlendirme zinciri: "yavas ag" interstitial'i gibi araci
+     *    sayfalar akis barindirmaz; meta refresh / location.replace /
+     *    location.assign ile gercek oyuncu sayfasina gonderir. Bu
+     *    hedefleri takip edip (en fazla 3 adim) her adimda akis ara.
+     *
+     * 2) Cookie-then-reload: interstitial cookie set edip ayni URL'yi
+     *    yeniden yukluyorsa yonlendirme hedefi bulunamaz; bu durumda
+     *    kisa bir bekleyisle ayni sayfayi bir kez daha dene.
+     *
+     * Hicbir sey bulunamazsa teşhis amacli HTML basini loglar.
+     */
     private suspend fun resolvePlayer(
         playerUrl: String,
         referer: String,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val response = app.get(playerUrl, headers = headers + mapOf("Referer" to referer))
-        if (!response.isSuccessful) {
-            Log.w(TAG, "Embed sayfasi HTTP " + response.code + ": " + playerUrl)
-            return false
-        }
-        val raw = FilmmakinesiParsing.normalizeEscaped(response.text)
-        val streams = FilmmakinesiParsing.extractStreamUrls(raw)
-        if (streams.isEmpty()) {
-            // Teshis: embed HTML'inin basini logla (bir sonraki logcat'te
-            // sitenin yeni oyuncusunun yapisini gormek icin)
-            Log.w(TAG, "Embed HTML basi (" + raw.length + " bayt): " +
-                raw.take(300).replace(Regex("\\s+"), " "))
-            Log.w(TAG, "Embed sayfasinda akis bulunamadi: " + playerUrl)
-            return false
+        val visited = LinkedHashSet<String>()
+        var currentUrl = playerUrl
+        var lastRaw = ""
+        var lastStatus = 0
+
+        repeat(3) { hop ->
+            if (!visited.add(currentUrl)) return@repeat
+            val response = try {
+                app.get(currentUrl, headers = headers + mapOf("Referer" to referer))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Embed sayfasina ulasilamadi (" + error.javaClass.simpleName + "): " + currentUrl)
+                return false
+            }
+            lastStatus = response.code
+            if (!response.isSuccessful) {
+                Log.w(TAG, "Embed sayfasi HTTP " + response.code + ": " + currentUrl)
+                return false
+            }
+            lastRaw = FilmmakinesiParsing.normalizeEscaped(response.text)
+            val streams = FilmmakinesiParsing.extractStreamUrls(lastRaw)
+            if (streams.isNotEmpty()) {
+                return emitStreams(streams, playerUrl, referer, callback)
+            }
+            val next = FilmmakinesiParsing.extractRedirectTargets(lastRaw)
+                .map { FilmmakinesiParsing.safeAbsoluteUrl(it, currentUrl) }
+                .firstOrNull { it !in visited }
+            if (next == null) {
+                // Yonlendirme yok: bu sayfa son durak (interstitial olabilir).
+                return@repeat
+            }
+            Log.i(TAG, "Embed yonlendirmesi takip ediliyor (adim " + (hop + 1) + "): " + next)
+            currentUrl = next
         }
 
+        // Interstitial cookie set edip ayni URL'yi yeniden yukluyor
+        // olabilir; tek seferlik kisa bekleyisle son kez dene.
+        if (lastRaw.isNotEmpty() && visited.size == 1) {
+            delay(800)
+            val retry = try {
+                app.get(playerUrl, headers = headers + mapOf("Referer" to referer))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                null
+            }
+            if (retry != null && retry.isSuccessful) {
+                lastRaw = FilmmakinesiParsing.normalizeEscaped(retry.text)
+                val streams = FilmmakinesiParsing.extractStreamUrls(lastRaw)
+                if (streams.isNotEmpty()) {
+                    Log.i(TAG, "Cookie/reload sonrasi akis bulundu: " + playerUrl)
+                    return emitStreams(streams, playerUrl, referer, callback)
+                }
+            }
+        }
+
+        // Teshis: embed HTML'inin basini logla (sitenin yeni oyuncusunun
+        // yapisini bir sonraki logcat'te gormek icin). 300 yerine 2000
+        // karakter: interstitial'lerde asil ipucu head/script bolumunde.
+        Log.w(TAG, "Embed HTML basi (HTTP " + lastStatus + ", " + lastRaw.length + " bayt): " +
+            lastRaw.take(2000).replace(Regex("\\s+"), " "))
+        Log.w(TAG, "Embed sayfasinda akis bulunamadi: " + playerUrl)
+        return false
+    }
+
+    /** Cozulen akis URL'lerini CloudStream linklerine donusturur. */
+    private suspend fun emitStreams(
+        streams: List<String>,
+        playerUrl: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         val origin = runCatching {
             "https://" + FilmmakinesiParsing.hostOf(streams.first())
         }.getOrDefault("https://" + FilmmakinesiParsing.hostOf(playerUrl))
 
         var emitted = false
         for (streamUrl in streams) {
-            val isHls = streamUrl.substringBefore("?")
-                .endsWith(".m3u8", ignoreCase = true)
-            if (isHls) {
+            // DUZELTME: HLS karari artik yalnizca ".m3u8" uzantisina
+            // dayanmiyor; manifest'ler "/master.", "/index." ve "/hls/"
+            // path'leriyle de sunulabiliyor (or.
+            // hls*.playmix.uno/hls/...mp4/master.txt). Uzantisina bakip
+            // yanlis siniflandirilan manifestler progressive VIDEO ile
+            // acilmaya calisilip HTTP 404 aliyordu.
+            if (FilmmakinesiParsing.isLikelyHls(streamUrl)) {
                 val links = M3u8Helper.generateM3u8(
                     source = name,
                     streamUrl = streamUrl,

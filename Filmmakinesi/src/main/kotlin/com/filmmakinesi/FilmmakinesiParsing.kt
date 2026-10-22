@@ -20,8 +20,19 @@ internal object FilmmakinesiParsing {
         Regex("""(?:src|data-(?:src|link|url|file))=["'](https?://[^"']+)["']""")
     private val m3u8Pattern =
         Regex("""(?i)(https?://[^\s"'<>\\]+\.m3u8[^\s"'<>\\]*)""")
+    // DUZELTME: mp4 deseni artik ".mp4" uzantisini yalnizca path sonunda
+    // kabul ediyor. Eski hali ".mp4" sonrasini de yutuyordu; bu yuzden
+    // ".../hls/film.mp4/master.txt" bicimindeki HLS manifest URL'leri mp4
+    // saniliyor, CloudStream oynatici onlari progressive VIDEO ile
+    // acmaya calisip HTTP 404 aliyordu (logcat'te
+    // "Response code: 404 ... master.txt" olarak goruldu).
     private val mp4Pattern =
-        Regex("""(?i)(https?://[^\s"'<>\\]+\.mp4[^\s"'<>\\]*)""")
+        Regex("""(?i)(https?://[^\s"'<>\\]+\.mp4(?:\?[^\s"'<>\\]*)?)""")
+    // HLS master/index manifest'leri ".txt" uzantisiyla da sunulabiliyor
+    // (or. ".../hls/filmakinesimp4-xxx.mp4/master.txt"). Bunlar once
+    // yakalanmali ki mp4 desenine dahil olup manifest mp4 sanilmasin.
+    private val playlistTxtPattern =
+        Regex("""(?i)(https?://[^\s"'<>\\]+/(?:master|index|playlist)[a-z0-9._-]*\.txt(?:\?[^\s"'<>\\]*)?)""")
     private val yearPattern = Regex("""\b(19|20)\d{2}\b""")
     // IMDB puani yalnizca "imdb" kelimesine yapisik bolgeden (en fazla 15
     // ayirici karakter) araniyor; "/10" oneki varsa tuketiliyor.
@@ -44,6 +55,25 @@ internal object FilmmakinesiParsing {
         """\}\('((?:\\.|[^'])*)',\s*(\d+),\s*(\d+),\s*'((?:\\.|[^'])*)'\.split\('\|'\)"""
     )
     private val base64TokenPattern = Regex("""\b([A-Za-z0-9+/]{20,}={0,2})\b""")
+
+    // ---------------------------------------------------------------
+    // "Yavas ag" interstitial'i gibi araci sayfalardan yonlendirme cikarma
+    // ---------------------------------------------------------------
+    // Logcat'te rapid embed sayfasi 41KB'lik bir kabuk donduruyor
+    // (icinde akis URL'si yok, "pjw-yavas-ag" sinifi var). Bu sayfalar
+    // gercek icerige meta refresh ya da location.* JS'i ile gecer.
+    private val metaRefreshTagPattern =
+        Regex("""(?i)<meta[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>""")
+    private val metaRefreshUrlPattern =
+        Regex("""(?i)url\s*=\s*([^"'>;\s]+)""")
+    // NOT: "location" kelimesinin onunde harf/rakam/$ olmamali — yoksa
+    // "someLocation=" gibi alan adlari yanlis pozitif uretir.
+    private val jsLocationPattern =
+        Regex("""(?i)(?<![\w$])(?:(?:window|top|self)\.)?location(?:\.href)?\s*=\s*["'](https?://[^"']+)["']""")
+    private val jsReplacePattern =
+        Regex("""(?i)(?<![\w$])(?:(?:window|top|self)\.)?location\.replace\(\s*["'](https?://[^"']+)["']""")
+    private val jsAssignPattern =
+        Regex("""(?i)(?<![\w$])(?:(?:window|top|self)\.)?location\.assign\(\s*["'](https?://[^"']+)["']""")
 
     fun isFilmUrl(href: String): Boolean {
         if (href.startsWith("javascript:", ignoreCase = true)) return false
@@ -81,15 +111,35 @@ internal object FilmmakinesiParsing {
     fun extractM3u8(raw: String): String? = extractStreamUrls(raw).firstOrNull()
 
     /**
-     * Tum oynatilabilir akis URL'lerini (m3u8 ve mp4) cikarir.
-     * Once kacis normalize edilir; bulunamazsa paketlenmis JS cozulup ve
-     * base64 token'lar acilip desenler tekrar denenir.
+     * Bir akis URL'sinin HLS olma olasiligini soyleyen islevsel kontrol.
+     * Uzantiya (.m3u8) tek basina guvenilmez: manifest'ler "/master.",
+     * "/index." veya "/playlist" path'leriyle ya da "/hls/" iceren CDN
+     * path'leri (or. hls*.playmix.uno/hls/...) ile de sunulabiliyor.
+     */
+    fun isLikelyHls(url: String): Boolean {
+        val path = url.substringBefore("?").substringBefore("#").lowercase()
+        if (path.endsWith(".m3u8")) return true
+        if (path.contains("/master.") || path.contains("/index.")) return true
+        if (path.contains("/playlist")) return true
+        if (path.contains("/hls/")) return true
+        return false
+    }
+
+    /**
+     * Tum oynatilabilir akis URL'lerini (m3u8, master/index.txt ve mp4)
+     * cikarir. Once kacis normalize edilir; bulunamazsa paketlenmis JS
+     * cozulup ve base64 token'lar acilip desenler tekrar denenir.
      */
     fun extractStreamUrls(raw: String): List<String> {
         val normalized = normalizeEscaped(raw)
         val found = LinkedHashSet<String>()
 
         fun collectFrom(text: String) {
+            // Siralama onemli: ".txt" manifest'leri mp4'dan once topla ki
+            // "...mp4/master.txt" iki kez farkli bicimde kaydedilmesin.
+            for (match in playlistTxtPattern.findAll(text)) {
+                found.add(match.value.trimEnd('"', '\'', ';', ',', '\\'))
+            }
             for (match in m3u8Pattern.findAll(text)) {
                 found.add(match.value.trimEnd('"', '\'', ';', ',', '\\'))
             }
@@ -117,7 +167,31 @@ internal object FilmmakinesiParsing {
                 if (inner != null) collectFrom(inner)
             }
         }
-        return found.toList()
+        val urls = found.toList()
+        // mp4 deseni artik path sinirinda kaldigi icin
+        // "...mp4/master.txt" gibi manifest URL'lerinin yalnizca "...mp4"
+        // on eki ayrica yakalaniyor; bu kopuk parcalari (baska bir bulusun
+        // on eki olanlari) listeden at ki oynatici olu URL denemesin.
+        return urls.filterNot { m -> urls.any { o -> o.length > m.length && o.startsWith(m) } }
+    }
+
+    /**
+     * Interstitial/yonlendirme sayfalarindan gercek oyuncu sayfasina giden
+     * hedefleri cikarir: meta refresh, JS location atamalari ve
+     * location.replace/assign. Bos liste donmesi sayfanin yonlendirme
+     * barindirmadigi anlamina gelir.
+     */
+    fun extractRedirectTargets(html: String): List<String> {
+        val found = LinkedHashSet<String>()
+        for (tag in metaRefreshTagPattern.findAll(html)) {
+            metaRefreshUrlPattern.find(tag.value)?.let { match ->
+                found.add(match.groupValues[1].trim().trim('"', '\''))
+            }
+        }
+        for (match in jsLocationPattern.findAll(html)) found.add(match.groupValues[1])
+        for (match in jsReplacePattern.findAll(html)) found.add(match.groupValues[1])
+        for (match in jsAssignPattern.findAll(html)) found.add(match.groupValues[1])
+        return found.filter { it.startsWith("http") }
     }
 
     /** Dean Edwards packer formatindaki eval(...) bloklarini cozer. */
@@ -146,7 +220,7 @@ internal object FilmmakinesiParsing {
     /**
      * Metindeki gozle gorulur base64 token'lari cozer ve iclerinden
      * akis URL'si icerenleri dondurur (atob("...") deseni de bu kapsamda,
-     * cunku atof icindeki string ayni zamanda duz token olarak da gorunur).
+     * cunku atob icindeki string ayni zamanda duz token olarak da gorunur).
      */
     fun decodeBase64Tokens(text: String): List<String> {
         val out = LinkedHashSet<String>()
