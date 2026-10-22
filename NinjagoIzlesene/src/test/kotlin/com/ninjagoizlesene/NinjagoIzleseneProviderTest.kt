@@ -2,6 +2,8 @@ package com.ninjagoizlesene
 
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NinjagoIzleseneProviderTest {
@@ -28,5 +30,20 @@ class NinjagoIzleseneProviderTest {
         assertEquals(3, episodes[0].episode)
         assertEquals(2, episodes[1].season)
         assertEquals(4, episodes[1].episode)
+    }
+
+    @Test
+    fun adAndPlaceholderIframesAreNotTreatedAsPlayableContent() {
+        val provider = NinjagoIzleseneProvider()
+        val blank = Jsoup.parseBodyFragment("""<iframe src="about:blank"></iframe>""")
+            .selectFirst("iframe")!!
+        val ad = Jsoup.parseBodyFragment("""<iframe src="https://securepubads.g.doubleclick.net/tag"></iframe>""")
+            .selectFirst("iframe")!!
+        val player = Jsoup.parseBodyFragment("""<iframe src="https://dzen.ru/embed/abc123"></iframe>""")
+            .selectFirst("iframe")!!
+
+        assertFalse(provider.isCandidatePlayerIframe(blank))
+        assertFalse(provider.isCandidatePlayerIframe(ad))
+        assertTrue(provider.isCandidatePlayerIframe(player))
     }
 }
