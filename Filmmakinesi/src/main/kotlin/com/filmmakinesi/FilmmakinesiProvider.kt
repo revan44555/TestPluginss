@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.util.concurrent.CancellationException
@@ -26,6 +27,7 @@ class FilmmakinesiProvider : MainAPI() {
     override var lang = "tr"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie)
+    override val usesWebView = true
 
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Ana Sayfa",
@@ -374,6 +376,39 @@ class FilmmakinesiProvider : MainAPI() {
                     Log.w(TAG, "Cookie/reload stream adaylari oynatilamadi; hata teshisine devam edilir")
                 }
             }
+        }
+
+        // 5) Static HTML/JS çözümlemesi başarısızsa JavaScript'i WebView'de
+        // çalıştır ve gerçek medya isteğini ağ katmanında yakala. FilmMakinesi
+        // player'ı stream URL'sini runtime'da üretebildiğinden bu son çare önemlidir.
+        try {
+            val resolver = WebViewResolver(
+                interceptUrl = Regex("""(?i)(m3u8|master\\.txt|index\\.txt|playlist[^/?]*)"""),
+                additionalUrls = listOf(
+                    Regex("""(?i)(m3u8|master\\.txt|index\\.txt|playlist[^/?]*)""")
+                ),
+                useOkhttp = false,
+                timeout = 20_000L
+            )
+            val interceptedUrl = app.get(
+                url = lastPageUrl,
+                referer = referer,
+                headers = headers + mapOf("Referer" to referer),
+                interceptor = resolver
+            ).url
+            if (interceptedUrl.isNotBlank() &&
+                interceptedUrl != lastPageUrl &&
+                Regex("""(?i)(\\.m3u8|master\\.txt|index\\.txt|playlist)""").containsMatchIn(interceptedUrl)
+            ) {
+                Log.i(TAG, "WebView medya isteği yakaladı (host=" + FilmmakinesiParsing.hostOf(interceptedUrl) + ")")
+                if (emitStreams(listOf(interceptedUrl), playerUrl, lastPageUrl, callback)) return true
+            } else {
+                Log.w(TAG, "WebView fallback medya isteği bulamadı, host=" + FilmmakinesiParsing.hostOf(playerUrl))
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "WebView fallback başarısız (" + error.javaClass.simpleName + "), host=" + FilmmakinesiParsing.hostOf(playerUrl))
         }
 
         // Teshis: embed HTML'inin basini logla (sitenin yeni oyuncusunun
