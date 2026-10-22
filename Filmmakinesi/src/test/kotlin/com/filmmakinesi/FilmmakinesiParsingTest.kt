@@ -165,6 +165,25 @@ class FilmmakinesiParsingTest {
     }
 
     @Test
+    fun decodesFromCharCodeApplyWithStringReceiver() {
+        val url = "https://cdn.x.y/hls/apply-string.m3u8?sig=STRING"
+        val codes = url.map { it.code }.joinToString(",")
+        val html = """<script>var src=String.fromCharCode.apply(String,[$codes]);</script>"""
+
+        assertTrue(FilmmakinesiParsing.extractStreamUrls(html).any { it.contains(url) })
+    }
+
+    @Test
+    fun decodesUrlSafeBase64WithoutPadding() {
+        val url = "https://cdn.x.y/hls/url-safe.m3u8?sig=URL_SAFE"
+        val encoded = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(url.toByteArray(Charsets.UTF_8))
+        val html = """<script>var src=atob("$encoded");</script>"""
+
+        assertTrue("URL-safe, unpadded Base64 should be decoded", FilmmakinesiParsing.extractStreamUrls(html).any { it.contains(url) })
+    }
+
+    @Test
     fun decodesHexCharCodesAndIgnoresComputedExpressions() {
         val codes = "https://cdn.x/ok.m3u8".map { "0x" + it.code.toString(16) }.joinToString(",")
         val good = """var src=String.fromCharCode($codes)"""
