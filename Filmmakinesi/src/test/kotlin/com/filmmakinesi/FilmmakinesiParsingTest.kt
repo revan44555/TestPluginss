@@ -135,4 +135,78 @@ class FilmmakinesiParsingTest {
             "<script>var s=atob(\"$b64\");</script>")
         assertTrue(urls.any { it.contains("playlist.m3u8") })
     }
+
+    // ---------------------------------------------------------------
+    // Logcat (2026-10-22) senaryolarina karsi gerileme testleri
+    // ---------------------------------------------------------------
+
+    @Test
+    fun hlsMasterTxtIsNotMisclassifiedAsMp4() {
+        // Logcat'te site HLS master manifest'ini
+        // "...mp4/master.txt" path'iyle sundu; eski mp4 deseni bunu
+        // butun olarak mp4 sanip CloudStream'de progressive VIDEO +
+        // HTTP 404'e yol aciyordu.
+        val urls = FilmmakinesiParsing.extractStreamUrls(
+            "src:\"https://hls8.playmix.uno/hls/filmakinesimp4-f9gx1M12BwC.mp4/master.txt\""
+        )
+        assertEquals(1, urls.size)
+        assertTrue(urls.single().endsWith("master.txt"))
+        assertTrue(FilmmakinesiParsing.isLikelyHls(urls.single()))
+    }
+
+    @Test
+    fun plainMp4StaysProgressive() {
+        val urls = FilmmakinesiParsing.extractStreamUrls(
+            "file:\"https://cdn.ornek.site/video/film.mp4\""
+        )
+        assertEquals(listOf("https://cdn.ornek.site/video/film.mp4"), urls)
+        assertFalse(FilmmakinesiParsing.isLikelyHls(urls.single()))
+    }
+
+    @Test
+    fun mp4WithQueryStringIsStillCollected() {
+        // ".mp4" path sonu kisitlamasi query string'i yutmamaliydi.
+        val urls = FilmmakinesiParsing.extractStreamUrls(
+            "https://cdn.ornek.site/video/film.mp4?token=abc123&exp=1"
+        )
+        assertEquals(1, urls.size)
+        assertTrue(urls.single().contains("?token=abc123"))
+        assertFalse(FilmmakinesiParsing.isLikelyHls(urls.single()))
+    }
+
+    @Test
+    fun detectsHlsByMasterIndexOrHlsPath() {
+        assertTrue(FilmmakinesiParsing.isLikelyHls("https://cdn.x/master.m3u8"))
+        assertTrue(FilmmakinesiParsing.isLikelyHls("https://hls8.playmix.uno/hls/x.mp4/master.txt"))
+        assertTrue(FilmmakinesiParsing.isLikelyHls("https://cdn.x/hls/f/index.m3u8?tok=1"))
+        assertFalse(FilmmakinesiParsing.isLikelyHls("https://cdn.x/video/film.mp4"))
+    }
+
+    @Test
+    fun extractsInterstitialRedirectTargets() {
+        val meta = "<meta http-equiv=\"refresh\" content=\"3;url=https://rapid.filmmakinesi.to/embed-abc\">"
+        val js = "<script>window.location.replace(\"https://rapid.filmmakinesi.to/embed-def\");</script>"
+        val jsHref = "<script>location.href = \"https://rapid.filmmakinesi.to/embed-ghi\";</script>"
+        val none = "<html>akisku yok</html>"
+        assertEquals(
+            listOf("https://rapid.filmmakinesi.to/embed-abc"),
+            FilmmakinesiParsing.extractRedirectTargets(meta)
+        )
+        assertEquals(
+            listOf("https://rapid.filmmakinesi.to/embed-def"),
+            FilmmakinesiParsing.extractRedirectTargets(js)
+        )
+        assertEquals(
+            listOf("https://rapid.filmmakinesi.to/embed-ghi"),
+            FilmmakinesiParsing.extractRedirectTargets(jsHref)
+        )
+        assertTrue(FilmmakinesiParsing.extractRedirectTargets(none).isEmpty())
+    }
+
+    @Test
+    fun jsRedirectDoesNotFalsePositiveOnFieldNames() {
+        // "someLocation=" gibi alan adlari yonlendirme sayilmamaliydi.
+        val html = "<script>var someLocation = \"https://not.a.redirect/x\";</script>"
+        assertTrue(FilmmakinesiParsing.extractRedirectTargets(html).isEmpty())
+    }
 }
