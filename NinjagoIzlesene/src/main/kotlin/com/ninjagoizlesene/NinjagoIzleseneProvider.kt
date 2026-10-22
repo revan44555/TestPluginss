@@ -10,7 +10,6 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import android.util.Log
 import java.util.concurrent.CancellationException
-import java.net.URI
 
 class NinjagoIzleseneProvider : MainAPI() {
     override var mainUrl = "https://ninjagoizlesene.com.tr"
@@ -38,33 +37,8 @@ class NinjagoIzleseneProvider : MainAPI() {
         "Referer" to "$mainUrl/"
     )
 
-    // Known advertising hosts must not make a content page look playable.
-    private val adIframeHosts = setOf(
-        "doubleclick.net",
-        "googlesyndication.com",
-        "googleadservices.com",
-        "googletagservices.com",
-        "adnxs.com",
-        "taboola.com",
-        "outbrain.com",
-        "exoclick.com",
-        "popads.net",
-        "propellerads.com",
-        "trafficjunky.com",
-        "adsterra.com",
-        "adskeeper.co.uk"
-    )
-
-    internal fun isCandidatePlayerIframe(iframe: Element): Boolean {
-        val raw = iframe.attr("data-src").trim()
-            .takeIf { it.isNotBlank() && !it.equals("about:blank", ignoreCase = true) }
-            ?: iframe.attr("src").trim()
-                .takeIf { it.isNotBlank() && !it.equals("about:blank", ignoreCase = true) }
-            ?: return false
-        if (raw.startsWith("javascript:", ignoreCase = true)) return false
-        val host = runCatching { URI(fixUrl(raw)).host?.lowercase() }.getOrNull() ?: return false
-        return adIframeHosts.none { host == it || host.endsWith(".$it") }
-    }
+    private fun isCandidatePlayerIframe(iframe: Element): Boolean =
+        NinjagoPlayerFrameFilter.isCandidate(iframe, mainUrl)
 
     // ---------------------------------------------------------------
     // Dzen.ru (Yandex Zen) çözücüsü — DOKUNULMADI
@@ -444,7 +418,7 @@ class NinjagoIzleseneProvider : MainAPI() {
         }
     }
 
-    internal fun extractEpisodes(doc: Document, pageUrl: String, slug: String): List<Episode> {
+    private fun extractEpisodes(doc: Document, pageUrl: String, slug: String): List<Episode> {
         val episodes = mutableListOf<Episode>()
         val seenEpisodes = HashSet<String>()
         // URL şeklinden "bölüm" olduğu anlaşılamayan linkler için, doküman
@@ -510,20 +484,22 @@ class NinjagoIzleseneProvider : MainAPI() {
                     episodeNumber = urlMatch.groupValues[2].toInt()
                 }
                 episodeOnlyMatch != null -> {
-                    season = currentSeason
-                    episodeNumber = episodeOnlyMatch.groupValues[1].toInt()
+                    val position = NinjagoEpisodeNumbers.episodeOnlyLabel(
+                        currentSeason,
+                        episodeOnlyMatch.groupValues[1].toInt()
+                    )
+                    season = position.season
+                    episodeNumber = position.episode
                 }
                 isEpisodeLink(href, slug) -> {
                     season = currentSeason
-                    val next = (fallbackNumbers[currentSeason] ?: 0) + 1
-                    fallbackNumbers[currentSeason] = next
-                    episodeNumber = next
+                    episodeNumber = NinjagoEpisodeNumbers.nextFallback(currentSeason, fallbackNumbers)
                 }
                 else -> continue
             }
             // Nömrəsiz epizod sayğacı açıq yazılmış bölüm nömrələrini də nəzərə alır.
             // Əks halda 3. Bölüm-dən sonra yeni epizod səhvən Bölüm 1 ola bilər.
-            fallbackNumbers[season] = maxOf(fallbackNumbers[season] ?: 0, episodeNumber)
+            NinjagoEpisodeNumbers.record(fallbackNumbers, season, episodeNumber)
             if (!seenEpisodes.add(href)) continue
             var episodeName = text
                 .replace(textSeasonEpisode, "")
@@ -560,7 +536,7 @@ class NinjagoIzleseneProvider : MainAPI() {
         var doc = app.get(pageUrl, headers = headers).document
 
         fun pageHasPlayableContent(document: org.jsoup.nodes.Document): Boolean {
-            val hasIframe = document.select("iframe").any { isCandidatePlayerIframe(it) }
+            val hasIframe = document.select("iframe").any { NinjagoPlayerFrameFilter.isCandidate(it, mainUrl) }
             val hasVideoTag = document.select("video[src], source[src]").any {
                 it.attr("src").trim().isNotBlank()
             }
