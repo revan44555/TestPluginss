@@ -40,6 +40,13 @@ internal object FilmmakinesiParsing {
         Regex("""(?i)imdb[\s:.\-]{0,15}?\b([0-9]\.[0-9])\b(?:\s*/\s*10)?""")
     // Film URL'lerindeki "...-2026/" bicimli yil onegi.
     private val slugYearPattern = Regex("""-(19|20)\d{2}(?:[/?#]|$)""")
+    // Ana sayfa bolum basliklari icinden oynatilamayanlari elemek uzere:
+    // yaklasan vizyon filmlerinin henuz oyuncusu yok; dizi/bolum/fragman
+    // icerikleri ise bu provider yalnizca TvType.Movie sundugu icin
+    // kullanici "baglanti bulunamadi" hatasi alirdi (logcat sikayetinin
+    // bir baska kaynagi).
+    private val skippedSectionPattern =
+        Regex("""(?i)(yakla[sş]an|vizyon tarihi|dizi|b[oö]l[uü]m|fragman|sonu[cç]lar|men[uü])""")
 
     // ---------------------------------------------------------------
     // Dean Edwards JS packer cozucu + base64 cozucu
@@ -148,31 +155,95 @@ internal object FilmmakinesiParsing {
             }
         }
 
-        collectFrom(normalized)
+        // Tespit zinciri: dizgun metin -> packer cozumu -> base64 token'lar
+        // -> base64 icinde packer. Her asama once bulunana kadar dener.
+        fun attempt(text: String) {
+            collectFrom(text)
+            if (found.isEmpty()) {
+                // JS string birlestirme temizligi: "https:"+"//cdn..." -> https://cdn...
+                // (cozulmus kaynak kodda parcali string'ler tek URL'ye birlesir)
+                unpackPackedJs(text)?.let { collectFrom(it.replace("\"+\"", "")) }
+            }
+            if (found.isEmpty()) {
+                for (decoded in decodeBase64Tokens(text)) {
+                    collectFrom(decoded)
+                }
+            }
+            if (found.isEmpty()) {
+                // Son care: ham base64 icinde gomulu m3u8 olabilir
+                for (decoded in decodeBase64Tokens(text)) {
+                    val inner = unpackPackedJs(decoded)
+                    if (inner != null) collectFrom(inner)
+                }
+            }
+        }
 
-        if (found.isEmpty()) {
-            // JS string birlestirme temizligi: "https:"+"//cdn..." -> https://cdn...
-            // (cozulmus kaynak kodda parcali string'ler tek URL'ye birlesir)
-            unpackPackedJs(normalized)?.let { collectFrom(it.replace("\"+\"", "")) }
+        attempt(normalized)
+
+        // NOT: Kosul "found.isEmpty()" DEGIL — sayfadaki statik yer
+        // tutucu (decoy) manifest ilk taramada bulunup burayi atlamamali;
+        // yoksa gercek token (parcali JS'te) hic aciga cikmaz.
+        run {
+            // DUZELTME (logcat 2026-10-22 09:26): rapid embed sayfasi bir
+            // JWPlayer kabugu ve akis URL'sini "https:"+"//cdn..." gibi
+            // PARCALI string birlestirme ile gizliyor; dizgun metinde
+            // hicbir desen eslesmiyor. Birlestirilmis kopya uzerinde tum
+            // zinciri bastan deneyerek gercek akis adresini aciga cikar.
+            val rejoined = normalized
+                .replace("\"+\"", "")
+                .replace("'+'", "")
+                .replace("'\"+\"'", "")
+            if (rejoined != normalized) attempt(rejoined)
         }
-        if (found.isEmpty()) {
-            for (decoded in decodeBase64Tokens(normalized)) {
-                collectFrom(decoded)
-            }
-        }
-        if (found.isEmpty()) {
-            // Son care: ham base64 icinde gomulu m3u8 olabilir
-            for (decoded in decodeBase64Tokens(normalized)) {
-                val inner = unpackPackedJs(decoded)
-                if (inner != null) collectFrom(inner)
-            }
-        }
+
         val urls = found.toList()
         // mp4 deseni artik path sinirinda kaldigi icin
         // "...mp4/master.txt" gibi manifest URL'lerinin yalnizca "...mp4"
         // on eki ayrica yakalaniyor; bu kopuk parcalari (baska bir bulusun
         // on eki olanlari) listeden at ki oynatici olu URL denemesin.
         return urls.filterNot { m -> urls.any { o -> o.length > m.length && o.startsWith(m) } }
+    }
+
+    /**
+     * Akis bulunamayinca sayfadaki oyuncu kurulum ipuclarini isaret
+     * konumlariyla kisa parcalar halinde verir (teshis logu icin).
+     * JWPlayer setup(), sources/file alanlari ve saklama bicimleri
+     * hangi bolgedeyse bir sonraki duzeltme ona gore yapilir.
+     */
+    fun interestingSnippets(html: String, window: Int = 140): String {
+        val markers = listOf(
+            "jwplayer", "setup(", "sources", "file:", "playlist",
+            "atob", "eval(", "m3u8", "master", ".txt"
+        )
+        val parts = mutableListOf<String>()
+        for (marker in markers) {
+            val i = html.indexOf(marker, ignoreCase = true)
+            if (i >= 0) {
+                val end = minOf(i + window, html.length)
+                parts.add(
+                    "[" + marker + "@" + i + "] " +
+                        html.substring(i, end).replace(Regex("\\s+"), " ")
+                )
+            }
+        }
+        return parts.joinToString(" | ")
+    }
+
+    /**
+     * Sayfadaki <script src=...> adreslerini cikarir; ayni host'dakiler
+     * one alinir. JWPlayer kurulumu ayri bir JS dosyasindaysa akis
+     * URL'si orada gomulu olabilir (logcat'teki rapid embed kabugunda
+     * HTML icinde akis yok; kurulum JS'i dis kaynakta olabilir).
+     */
+    fun extractScriptSrcs(html: String, baseUrl: String): List<String> {
+        val baseHost = hostOf(baseUrl)
+        val out = LinkedHashSet<String>()
+        for (match in Regex("""<script[^>]+src=["']([^"']+)["']""").findAll(html)) {
+            val absolute = safeAbsoluteUrl(normalizeEscaped(match.groupValues[1]), baseUrl)
+            if (hostOf(absolute).isNotEmpty()) out.add(absolute)
+        }
+        // Ayni host once gelir; kararli sirala (LinkedHashSet duzenini koru)
+        return out.sortedBy { hostOf(it) != baseHost }
     }
 
     /**
@@ -322,6 +393,10 @@ internal object FilmmakinesiParsing {
             ?: return null
         return if (value in 0f..10f) value else null
     }
+
+    /** Ana sayfa bolum adi oynatilamayan icerige mi ait? */
+    fun isSkippedHomeSection(name: String): Boolean =
+        skippedSectionPattern.containsMatchIn(name)
 
     fun safeAbsoluteUrl(url: String, base: String): String {
         val trimmed = url.trim()

@@ -44,6 +44,29 @@ class FilmmakinesiProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
+        // Ana sayfa (birinci sayfa): sayfadaki tema bolumlerini ayri ayri
+        // baslikli listelere bol; oynatilamayan bolumleri ele. Bolum ayrisi
+        // basarisiz olursa eski duz liste davranisina dus (guvenli geri dusus).
+        if (page <= 1 && request.data.removeSuffix("/") == mainUrl) {
+            val doc = try {
+                getDoc(request.data)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Ana sayfa acilamadi (" + error.javaClass.simpleName + ")")
+                null
+            }
+            if (doc != null) {
+                try {
+                    parseHomepageSections(doc)?.let { return it }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    Log.w(TAG, "Bolum ayrisi basarisiz, duz listeye dusuluyor: " + error.javaClass.simpleName)
+                }
+            }
+        }
+
         val base = request.data
         val pageUrl = if (page > 1 && base.endsWith("/filmler-1/")) {
             base.replace("/filmler-1/", "/filmler-$page/")
@@ -64,6 +87,60 @@ class FilmmakinesiProvider : MainAPI() {
             items,
             hasNext = pageUrl.contains("/filmler-") && items.isNotEmpty()
         )
+    }
+
+    /**
+     * Ana sayfayi tema bolumlerine ayirir: her bolum basligi kendi film
+     * kartlariyla eslestirilir ve ayri baslikli bir CloudStream listesi
+     * olur (or. "One Cikanlar", "Son Filmler"). Oynatilamayan bolumler
+     * (yaklasan vizyon, dizi, bolum, fragman) elenir — bu icerikler
+     * TvType.Movie provider'inda "baglanti bulunamadi" hatasina yol
+     * aciyordu. Bolum yapisi cozulemezse null doner; duz listeye dusulur.
+     */
+    private fun parseHomepageSections(doc: Document): HomePageResponse? {
+        val sections = LinkedHashMap<String, MutableList<SearchResponse>>()
+        val headings = doc.select(
+            "h1, h2, h3, .section-title, .items-head, .widget-title, " +
+                "[class*=section-title], [class*=bolum]"
+        )
+        for (heading in headings) {
+            val name = heading.text().trim().replace(Regex("\\s+"), " ")
+            if (name.isBlank() || name.length > 60) continue
+            if (FilmmakinesiParsing.isSkippedHomeSection(name)) continue
+            // Nav/menusu/footer icindeki basliklar icerik bolumu degildir.
+            if (heading.closest("nav, header, footer, [class*=menu], [class*=nav]") != null) continue
+            // Film kartinin kendi basligi bolum basligi degildir: kart
+            // basliklari filmin /film/ baglantisini tasir.
+            val headingLink = heading.selectFirst("a[href]")
+            if (headingLink != null && FilmmakinesiParsing.isFilmUrl(headingLink.attr("href"))) continue
+            val scope = smallestScopeWithFilms(heading, minFilms = 3, maxUp = 5) ?: continue
+            val cards = parseFilmCards(scope)
+            if (cards.size >= 2) {
+                sections.getOrPut(name) { mutableListOf() }.addAll(cards)
+            }
+        }
+        if (sections.isEmpty()) return null
+        return HomePageResponse(
+            sections.map { (name, items) -> HomePageList(name, items) },
+            hasNext = false
+        )
+    }
+
+    /** Basliktan yukari cikarak icinde en az minFilms film baglantisi
+     *  olan en kucuk kapsayiciyi dondurur — bolum blogunun kendisidir;
+     *  daha yukari cikmak baska bolumleri yutup tek dev liste uretirdi. */
+    private fun smallestScopeWithFilms(heading: Element, minFilms: Int, maxUp: Int): Element? {
+        var node: Element? = heading
+        var up = 0
+        while (node != null && up <= maxUp) {
+            val films = node.select("a[href]").count {
+                FilmmakinesiParsing.isFilmUrl(it.attr("href"))
+            }
+            if (films >= minFilms) return node
+            node = node.parent()
+            up++
+        }
+        return null
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -209,7 +286,32 @@ class FilmmakinesiProvider : MainAPI() {
             currentUrl = next
         }
 
-        // Interstitial cookie set edip ayni URL'yi yeniden yukluyor
+        // 3) Akis hala yok: JWPlayer kurulum JS'i sayfada gomulu degil,
+        //    ayri bir <script src> dosyasinda olabilir. Ayni host'daki
+        //    script'leri tarayip akis ara (en fazla 4 dosya).
+        if (lastRaw.isNotEmpty()) {
+            val scripts = FilmmakinesiParsing.extractScriptSrcs(lastRaw, playerUrl).take(4)
+            for (script in scripts) {
+                if (!visited.add(script)) continue
+                val scriptResponse = try {
+                    app.get(script, headers = headers + mapOf("Referer" to currentUrl))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    null
+                }
+                if (scriptResponse != null && scriptResponse.isSuccessful) {
+                    val scriptText = FilmmakinesiParsing.normalizeEscaped(scriptResponse.text)
+                    val scriptStreams = FilmmakinesiParsing.extractStreamUrls(scriptText)
+                    if (scriptStreams.isNotEmpty()) {
+                        Log.i(TAG, "Script icerisinde akis bulundu: " + script)
+                        return emitStreams(scriptStreams, playerUrl, referer, callback)
+                    }
+                }
+            }
+        }
+
+        // 4) Interstitial cookie set edip ayni URL'yi yeniden yukluyor
         // olabilir; tek seferlik kisa bekleyisle son kez dene.
         if (lastRaw.isNotEmpty() && visited.size == 1) {
             // kotlinx-coroutines eklenti classpath'inde yok; IO
@@ -235,6 +337,7 @@ class FilmmakinesiProvider : MainAPI() {
         // Teshis: embed HTML'inin basini logla (sitenin yeni oyuncusunun
         // yapisini bir sonraki logcat'te gormek icin). 300 yerine 2000
         // karakter: interstitial'lerde asil ipucu head/script bolumunde.
+        Log.w(TAG, "Embed isaretleri: " + FilmmakinesiParsing.interestingSnippets(lastRaw))
         Log.w(TAG, "Embed HTML basi (HTTP " + lastStatus + ", " + lastRaw.length + " bayt): " +
             lastRaw.take(2000).replace(Regex("\\s+"), " "))
         Log.w(TAG, "Embed sayfasinda akis bulunamadi: " + playerUrl)
@@ -261,6 +364,29 @@ class FilmmakinesiProvider : MainAPI() {
             // yanlis siniflandirilan manifestler progressive VIDEO ile
             // acilmaya calisilip HTTP 404 aliyordu.
             if (FilmmakinesiParsing.isLikelyHls(streamUrl)) {
+                // ".txt" uzantili manifest'ler statik yer tutucu (decoy)
+                // olabiliyor: logcat'te uc farkli filmde ayni playmix
+                // token'i dondu ve M3u8Helper icerigi playlist olmadigini
+                // reddetti. Yayindan once ucuz bir HEAD ile 404/410
+                // kontrolu yap; canli degilse hic link uretme.
+                if (streamUrl.substringBefore("?").endsWith(".txt", ignoreCase = true)) {
+                    val headCode = try {
+                        app.head(
+                            streamUrl,
+                            headers = mapOf(
+                                "Referer" to referer,
+                                "Origin" to origin,
+                                "User-Agent" to (headers["User-Agent"] ?: "")
+                            )
+                        ).code
+                    } catch (error: Exception) {
+                        -1
+                    }
+                    if (headCode == 404 || headCode == 410) {
+                        Log.w(TAG, "Manifest kapali (HTTP " + headCode + "), atlaniyor: " + streamUrl)
+                        continue
+                    }
+                }
                 val links = M3u8Helper.generateM3u8(
                     source = name,
                     streamUrl = streamUrl,
