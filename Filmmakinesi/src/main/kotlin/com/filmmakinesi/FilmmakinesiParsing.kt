@@ -316,6 +316,8 @@ internal object FilmmakinesiParsing {
 
         val urlPattern = Regex("""(?i)https?://[^\s"'<>\\]+""")
         val quotedLiteralPattern = Regex("""(["'])([^"'\n]{5,})\1""")
+        // JavaScript template literals can contain signed tokens too; treat their full body as sensitive.
+        val templateLiteralPattern = Regex("""(`)((?:\\.|[^`\\]){5,})`""")
         val numericArrayPattern = Regex("""(?<![\w])(?:\d{1,5}\s*,\s*){10,}\d{1,5}(?![\w])""")
         val regions = selected.map { (index, anchor) ->
             val start = maxOf(0, index - window / 3)
@@ -327,6 +329,9 @@ internal object FilmmakinesiParsing {
                 .replace(quotedLiteralPattern) { match ->
                     val quote = match.groupValues[1]
                     quote + "[LITERAL:" + match.groupValues[2].length + "]" + quote
+                }
+                .replace(templateLiteralPattern) { match ->
+                    "`[TEMPLATE_LITERAL:" + match.groupValues[2].length + "]`"
                 }
                 .replace(Regex("""\s+"""), " ")
             "[@$index $anchor] $redacted"
