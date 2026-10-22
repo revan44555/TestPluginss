@@ -417,7 +417,7 @@ class FilmmakinesiProvider : MainAPI() {
                       );
                       if (button && attempts <= 3) button.click();
                     } catch (e) {}
-                    if (attempts < 90) setTimeout(kickPlayer, 500);
+                    if (attempts < 34) setTimeout(kickPlayer, 500);
                   }
                   setTimeout(kickPlayer, 250);
                 })();
@@ -433,7 +433,7 @@ class FilmmakinesiProvider : MainAPI() {
                 additionalUrls = listOf(playlistRegex),
                 script = playScript,
                 useOkhttp = false,
-                timeout = 45_000L
+                timeout = 18_000L
             )
             // Do not pass the provider's desktop User-Agent as an extra header.
             // Let Chromium send a consistent, genuine WebView request fingerprint.
@@ -546,7 +546,19 @@ class FilmmakinesiProvider : MainAPI() {
         manifestValidated: Boolean = false
     ): Boolean {
         var emitted = false
-        for (streamUrl in streams) {
+        val orderedStreams = streams.distinct().sortedBy { url ->
+            when {
+                url.contains(".m3u8", ignoreCase = true) -> 0
+                url.contains(".m3u", ignoreCase = true) -> 1
+                url.contains("master", ignoreCase = true) || url.contains("index", ignoreCase = true) -> 2
+                FilmmakinesiParsing.isLikelyHls(url) -> 3
+                else -> 4
+            }
+        }.take(24)
+        if (streams.size > orderedStreams.size) {
+            Log.i(TAG, "Akis adaylari sinirlandi: ${streams.size} -> ${orderedStreams.size}")
+        }
+        for (streamUrl in orderedStreams) {
             val streamHost = FilmmakinesiParsing.hostOf(streamUrl)
                 .ifBlank { FilmmakinesiParsing.hostOf(playerUrl) }
             val origin = "https://" + streamHost
@@ -560,18 +572,20 @@ class FilmmakinesiProvider : MainAPI() {
                 ?.value ?: referer
 
             if (FilmmakinesiParsing.isLikelyHls(streamUrl)) {
-                // .txt uçları bazen artık var olmayan decoy manifestlerdir.
-                // HTTP yanıtını kapatmayı garanti et ve 404/410 bağlantıları ele.
-                if (!manifestValidated && streamUrl.substringBefore("?").endsWith(".txt", ignoreCase = true)) {
-                    val headCode = try {
-                        app.head(streamUrl, headers = playbackHeaders).okhttpResponse.use { it.code }
+                // Do not hand dead/HTML decoy URLs to M3u8Helper. Verify every
+                // static HLS candidate (not only .txt) before generating links.
+                // This avoids repeated playlist parsing/network retries on 404 pages.
+                if (!manifestValidated) {
+                    val probe = try {
+                        app.get(streamUrl, headers = playbackHeaders)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
-                        -1
+                        null
                     }
-                    if (headCode == 404 || headCode == 410) {
-                        Log.w(TAG, "Manifest kapalı (HTTP " + headCode + "), host=" + streamHost)
+                    val body = probe?.text?.removePrefix("\uFEFF")?.trimStart().orEmpty()
+                    if (probe == null || !probe.isSuccessful || !body.startsWith("#EXTM3U")) {
+                        Log.w(TAG, "Manifest adayı geçersiz (HTTP=" + (probe?.code ?: -1) + ", host=" + streamHost + ")")
                         continue
                     }
                 }
