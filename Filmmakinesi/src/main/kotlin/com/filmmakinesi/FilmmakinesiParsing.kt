@@ -61,14 +61,14 @@ internal object FilmmakinesiParsing {
     private val packerPattern = Regex(
         """\}\('((?:\\.|[^'])*)',\s*(\d+),\s*(\d+),\s*'((?:\\.|[^'])*)'\.split\('\|'\)"""
     )
-    private val base64TokenPattern = Regex("""\b([A-Za-z0-9+/]{20,}={0,2})\b""")
+    private val base64TokenPattern = Regex("""(?<![A-Za-z0-9+/_-])([A-Za-z0-9+/_-]{20,}={0,2})(?![A-Za-z0-9+/_=-])""")
     // The latest player pages also synthesize stream strings from numeric character codes.
     // Only literal numeric arguments are decoded; arbitrary JavaScript is never executed.
     private val fromCharCodePattern = Regex(
         """(?is)(?:String\s*\.\s*fromCharCode|String\s*\[\s*["']fromCharCode["']\s*\])\s*\(([^)]{1,4096})\)"""
     )
     private val fromCharCodeApplyPattern = Regex(
-        """(?is)(?:String\s*\.\s*fromCharCode|String\s*\[\s*["']fromCharCode["']\s*\])\s*\.\s*apply\s*\(\s*(?:null|undefined)\s*,\s*\[([^\]]{1,4096})\]\s*\)"""
+        """(?is)(?:String\s*\.\s*fromCharCode|String\s*\[\s*["']fromCharCode["']\s*\])\s*\.\s*apply\s*\(\s*(?:null|undefined|String|this)\s*,\s*\[([^\]]{1,4096})\]\s*\)"""
     )
 
     // ---------------------------------------------------------------
@@ -516,10 +516,10 @@ internal object FilmmakinesiParsing {
      */
     internal fun tryDecodeBase64Text(candidate: String): String? {
         val clean = candidate.filter { !it.isWhitespace() }
-        if (clean.length < 8 || clean.length % 4 != 0) return null
+        if (clean.length < 8 || clean.length % 4 == 1) return null
         for (c in clean) {
             val ok = c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' ||
-                c == '+' || c == '/' || c == '='
+                c == '+' || c == '/' || c == '-' || c == '_' || c == '='
             if (!ok) return null
         }
         return runCatching { String(base64Decode(clean), Charsets.UTF_8) }.getOrNull()
@@ -531,8 +531,11 @@ internal object FilmmakinesiParsing {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".forEachIndexed { i, c ->
             table[c.code] = i
         }
-        val clean = input.filter { it != ' ' && it != '\n' && it != '\r' && it != '\t' }
-        require(clean.length % 4 == 0) { "gecersiz base64 uzunluk" }
+        val compact = input.filter { it != ' ' && it != '\n' && it != '\r' && it != '\t' }
+            .replace('-', '+')
+            .replace('_', '/')
+        require(compact.length % 4 != 1) { "gecersiz base64 uzunluk" }
+        val clean = compact + "=".repeat((4 - compact.length % 4) % 4)
         val out = java.io.ByteArrayOutputStream()
         var i = 0
         while (i < clean.length) {
