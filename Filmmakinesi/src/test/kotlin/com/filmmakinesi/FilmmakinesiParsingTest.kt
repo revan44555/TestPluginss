@@ -68,6 +68,33 @@ class FilmmakinesiParsingTest {
     }
 
     @Test
+    fun urlSlugYearTakesPriorityOverFreeText() {
+        // URL slug'inda yil varsa metindeki ilk yil degil o kullanilir:
+        // metindeki "1998" konu baglamindan geliyor olabilir.
+        assertEquals(
+            2026,
+            FilmmakinesiParsing.extractYear("1998 yilinda gecen bir hikaye", "https://filmmakinesi.to/film/disco-2026/")
+        )
+        // Slug'da yil yoksa metne dusulur (geri uyumlu davranis).
+        assertEquals(
+            2019,
+            FilmmakinesiParsing.extractYear("Vizyon 2019", "https://filmmakinesi.to/film/the-legend-of-aang-fm3/")
+        )
+        // Hint'siz cagri eski davranisi korur.
+        assertEquals(2024, FilmmakinesiParsing.extractYear("IMDB 6.1 2024"))
+    }
+
+    @Test
+    fun imdbRatingMustSitNextToImdbKeyword() {
+        assertEquals(7.5f, FilmmakinesiParsing.extractImdb("IMDB: 7.5/10")!!, 0.01f)
+        assertEquals(6.9f, FilmmakinesiParsing.extractImdb("imdb 6.9")!!, 0.01f)
+        // "imdb" gecen bir metinde uzaktaki x.y sayisi puan sayilmamaliydi
+        // (onceki desen ilk x.y'yi aliyordu).
+        assertNull(FilmmakinesiParsing.extractImdb("IMDB puanina sahip, 2.5 saat suren film"))
+        assertNull(FilmmakinesiParsing.extractImdb("Sadece bir film"))
+    }
+
+    @Test
     fun resolvesRelativeAndProtocolRelativeUrls() {
         assertEquals(
             "https://filmmakinesi.to/film/disco-2026/",
