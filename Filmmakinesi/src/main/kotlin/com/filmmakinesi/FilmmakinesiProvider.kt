@@ -256,6 +256,7 @@ class FilmmakinesiProvider : MainAPI() {
         var currentUrl = playerUrl
         var lastRaw = ""
         var lastStatus = 0
+        var lastPageUrl = playerUrl
         var followedRedirect = false
 
         for (hop in 0 until 3) {
@@ -274,6 +275,7 @@ class FilmmakinesiProvider : MainAPI() {
                 return false
             }
             lastRaw = FilmmakinesiParsing.normalizeEscaped(response.text)
+            lastPageUrl = currentUrl
             val streams = FilmmakinesiParsing.extractStreamUrls(lastRaw)
             if (streams.isNotEmpty()) {
                 // DUZELTME (logcat 2026-10-22 10:46): Akis bulundugu halde
@@ -300,11 +302,11 @@ class FilmmakinesiProvider : MainAPI() {
         //    ayri bir <script src> dosyasinda olabilir. Ayni host'daki
         //    script'leri tarayip akis ara (en fazla 4 dosya).
         if (lastRaw.isNotEmpty()) {
-            val scripts = FilmmakinesiParsing.extractScriptSrcs(lastRaw, currentUrl).take(4)
+            val scripts = FilmmakinesiParsing.extractScriptSrcs(lastRaw, lastPageUrl).take(4)
             for (script in scripts) {
                 if (!visited.add(script)) continue
                 val scriptResponse = try {
-                    app.get(script, headers = headers + mapOf("Referer" to currentUrl))
+                    app.get(script, headers = headers + mapOf("Referer" to lastPageUrl))
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
