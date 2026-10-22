@@ -385,6 +385,10 @@ class FilmmakinesiProvider : MainAPI() {
             val playlistRegex = Regex(
                 """(?i)(\.m3u8(?:[?#]|$)|\.m3u(?:[?#]|$)|(?:master|index)[^/?#]*\.txt(?:[?#]|$)|playlist[^/?#]*(?:[/?#]|$))"""
             )
+            // This exact Cloudflare error stylesheet appeared in the supplied
+            // log instead of player/media requests. Stop this embed immediately
+            // and let loadLinks continue with the next alternative.
+            val cloudflareErrorRegex = Regex("""(?i)/cdn-cgi/styles/cf\.errors\.css(?:[?#]|$)""")
             val playScript = """
                 (function () {
                   if (window.__fmCloudStreamPlayLoop) return;
@@ -430,7 +434,7 @@ class FilmmakinesiProvider : MainAPI() {
                 // Never stop at the first playlist: some embeds deliberately
                 // request dead master.txt decoys before the working manifest.
                 interceptUrl = Regex("""(?!)"""),
-                additionalUrls = listOf(playlistRegex),
+                additionalUrls = listOf(playlistRegex, cloudflareErrorRegex),
                 script = playScript,
                 useOkhttp = false,
                 timeout = 18_000L
@@ -441,7 +445,15 @@ class FilmmakinesiProvider : MainAPI() {
                 url = lastPageUrl,
                 referer = referer,
                 headers = mapOf("Referer" to referer),
-                requestCallBack = { false }
+                requestCallBack = { request ->
+                    if (cloudflareErrorRegex.containsMatchIn(request.url.toString())) {
+                        Log.w(TAG, "Cloudflare hata sayfasi algilandi; diger oynaticiya geciliyor (host=" +
+                            FilmmakinesiParsing.hostOf(lastPageUrl) + ")")
+                        true
+                    } else {
+                        false
+                    }
+                }
             )
             val browserUserAgent = WebViewResolver.webViewUserAgent
                 ?.takeIf { it.isNotBlank() }
@@ -450,6 +462,7 @@ class FilmmakinesiProvider : MainAPI() {
             // Prefer .m3u8, then other manifest names. Preserve the headers
             // and actual Referer from Chromium for token/cookie-protected hosts.
             val candidates = capturedRequests
+                .filter { playlistRegex.containsMatchIn(it.url.toString()) }
                 .distinctBy { it.url.toString() }
                 .sortedBy { request ->
                     val url = request.url.toString()
