@@ -209,4 +209,51 @@ class FilmmakinesiParsingTest {
         val html = "<script>var someLocation = \"https://not.a.redirect/x\";</script>"
         assertTrue(FilmmakinesiParsing.extractRedirectTargets(html).isEmpty())
     }
+
+    @Test
+    fun jwplayerConcatSplitStreamIsFoundAfterRejoin() {
+        // Logcat (2026-10-22 09:26): rapid embed JWPlayer kabugu ve akis
+        // URL'sini parcali string birlestirme ile gizliyor; dizgun
+        // metinde hicbir desen eslesmiyor.
+        val page = "jwplayer(\"player\").setup({sources:[{file:\"https:\"+\"//hls8.playmix.uno\"+\"/hls/filmakinesimp4-GERCEKTOKEN.mp4\"+\"/master.m3u8?tok=ABC123\"}]});"
+        val urls = FilmmakinesiParsing.extractStreamUrls(page)
+        assertEquals(1, urls.size)
+        assertTrue(urls.single().contains("hls8.playmix.uno/hls/filmakinesimp4-GERCEKTOKEN.mp4/master.m3u8?tok=ABC123"))
+        assertTrue(FilmmakinesiParsing.isLikelyHls(urls.single()))
+    }
+
+    @Test
+    fun extractsScriptSrcsWithSameHostFirst() {
+        val html = "<script src=\"/player/setup.js\"></script>" +
+            "<script src=\"https://rapid.filmmakinesi.to/player/core.js\"></script>" +
+            "<script src=\"https://cdn.ornek.site/lib.js\"></script>"
+        val srcs = FilmmakinesiParsing.extractScriptSrcs(html, "https://rapid.filmmakinesi.to/embed-x/")
+        assertEquals(3, srcs.size)
+        assertTrue(srcs[0].contains("rapid.filmmakinesi.to"))
+        assertTrue(srcs[1].contains("rapid.filmmakinesi.to"))
+        assertTrue(srcs[2].contains("cdn.ornek.site"))
+    }
+
+    @Test
+    fun snippetsReportPlayerMarkers() {
+        val html = "<html><body>jwplayer(\"player\").setup({file:\"x.m3u8\"})</body></html>"
+        val s = FilmmakinesiParsing.interestingSnippets(html)
+        assertTrue(s.contains("jwplayer@"))
+        assertTrue(s.contains("setup(@"))
+        assertTrue(s.contains("m3u8@"))
+    }
+
+    @Test
+    fun skipsUnplayableHomepageSections() {
+        // Ana sayfa bolumleri: yaklasan vizyon/dizi/bolum/fragman
+        // oynatilamaz; "Vizyondakiler" gibi oynatilabilir bolumler
+        // kalip ifadeye takilmamali.
+        assertTrue(FilmmakinesiParsing.isSkippedHomeSection("Vizyon Tarihi Yaklaşan Filmler"))
+        assertTrue(FilmmakinesiParsing.isSkippedHomeSection("Son Diziler"))
+        assertTrue(FilmmakinesiParsing.isSkippedHomeSection("Son Eklenen Bölümler"))
+        assertTrue(FilmmakinesiParsing.isSkippedHomeSection("Fragmanlar"))
+        assertFalse(FilmmakinesiParsing.isSkippedHomeSection("Öne Çıkanlar"))
+        assertFalse(FilmmakinesiParsing.isSkippedHomeSection("Son Filmler"))
+        assertFalse(FilmmakinesiParsing.isSkippedHomeSection("Vizyondakiler"))
+    }
 }
