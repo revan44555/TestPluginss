@@ -294,18 +294,49 @@ internal object FilmmakinesiParsing {
      * birlesim mantigini gormek icin; parca atamalarini bir sonraki
      * logcat'te yakalamak icin kullanilir.
      */
-    fun obfuscationRegionSnippet(html: String, window: Int = 1300): String? {
-        val anchors = listOf("file_link", "atob(", "eval(function(p,a,c,k,e,d)")
-        for (anchor in anchors) {
+    fun obfuscationRegionSnippet(html: String, window: Int = 700): String? {
+        val anchors = listOf(
+            "file_link", "atob(", "fromCharCode", "eval(function(p,a,c,k,e,d)",
+            ".reverse", "split('|')", "join("
+        )
+        val hits = anchors.mapNotNull { anchor ->
             val index = html.indexOf(anchor, ignoreCase = true)
-            if (index >= 0) {
-                val start = maxOf(0, index - window / 3)
-                val end = minOf(html.length, index + window)
-                val region = html.substring(start, end).replace(Regex("\\s+"), " ")
-                return "[@$index $anchor] $region"
+            if (index >= 0) index to anchor else null
+        }.sortedBy { it.first }
+        if (hits.isEmpty()) return null
+
+        // Include a few distinct code regions, but avoid duplicate overlapping windows.
+        val selected = mutableListOf<Pair<Int, String>>()
+        for (hit in hits) {
+            if (selected.none { kotlin.math.abs(it.first - hit.first) < window / 2 }) {
+                selected.add(hit)
             }
+            if (selected.size >= 4) break
         }
-        return null
+
+        val urlPattern = Regex("""(?i)https?://[^\s"'<>\\]+""")
+        val quotedLiteralPattern = Regex("""(["'])([^"'\n]{5,})\1""")
+        // JavaScript template literals can contain signed tokens too; treat their full body as sensitive.
+        val templateLiteralPattern = Regex("""(`)((?:\\.|[^`\\]){5,})`""")
+        val numericArrayPattern = Regex("""(?<![\w])(?:\d{1,5}\s*,\s*){10,}\d{1,5}(?![\w])""")
+        val regions = selected.map { (index, anchor) ->
+            val start = maxOf(0, index - window / 3)
+            val end = minOf(html.length, index + window)
+            val redacted = html.substring(start, end)
+                .replace(urlPattern, "[URL]")
+                .replace(base64TokenPattern, "[BASE64]")
+                .replace(numericArrayPattern, "[NUMERIC_ARRAY]")
+                .replace(quotedLiteralPattern) { match ->
+                    val quote = match.groupValues[1]
+                    quote + "[LITERAL:" + match.groupValues[2].length + "]" + quote
+                }
+                .replace(templateLiteralPattern) { match ->
+                    "`[TEMPLATE_LITERAL:" + match.groupValues[2].length + "]`"
+                }
+                .replace(Regex("""\s+"""), " ")
+            "[@$index $anchor] $redacted"
+        }
+        return regions.joinToString(" || ").take(3000)
     }
 
     /**

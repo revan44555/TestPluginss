@@ -207,6 +207,32 @@ class FilmmakinesiParsingTest {
     // ---------------------------------------------------------------
 
     @Test
+    fun obfuscationDiagnosticsMaskUrlsAndLongLiterals() {
+        val html = """
+            <script>
+              var file_link = "this-is-a-secret-fragment-98765";
+              var token = `TOPSECRET123456`;
+              var stream = "https://cdn.example/hls/master.m3u8?token=TOPSECRET123";
+              var src = atob(file_link.split('').reverse().join(''));
+              var encoded = String.fromCharCode(104,116,116,112,115,58,47,47,115,101,99,114,101,116,46,101,120,97,109,112,108,101);
+            </script>
+        """.trimIndent()
+
+        val snippet = FilmmakinesiParsing.obfuscationRegionSnippet(html)
+        assertTrue(snippet != null)
+        assertTrue(snippet!!.contains("file_link"))
+        assertTrue(snippet.contains("atob("))
+        assertTrue(snippet.contains("fromCharCode"))
+        assertFalse(snippet.contains("TOPSECRET123"))
+        assertFalse(snippet.contains("TOPSECRET123456"))
+        assertTrue(snippet.contains("[TEMPLATE_LITERAL:15]"))
+        assertFalse(snippet.contains("this-is-a-secret-fragment"))
+        assertFalse(snippet.contains("https://cdn.example"))
+        assertTrue(snippet.contains("[NUMERIC_ARRAY]"))
+        assertFalse(snippet.contains("104,116,116,112"))
+    }
+
+    @Test
     fun hlsMasterTxtIsNotMisclassifiedAsMp4() {
         // Logcat'te site HLS master manifest'ini
         // "...mp4/master.txt" path'iyle sundu; eski mp4 deseni bunu
