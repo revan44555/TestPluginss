@@ -383,9 +383,9 @@ class FilmmakinesiProvider : MainAPI() {
         // player'ı stream URL'sini runtime'da üretebildiğinden bu son çare önemlidir.
         try {
             val resolver = WebViewResolver(
-                interceptUrl = Regex("""(?i)(m3u8|master\\.txt|index\\.txt|playlist[^/?]*)"""),
+                interceptUrl = Regex("""(?i)(m3u8|master\.txt|index\.txt|playlist[^/?]*)"""),
                 additionalUrls = listOf(
-                    Regex("""(?i)(m3u8|master\\.txt|index\\.txt|playlist[^/?]*)""")
+                    Regex("""(?i)(m3u8|master\.txt|index\.txt|playlist[^/?]*)""")
                 ),
                 useOkhttp = false,
                 timeout = 20_000L
@@ -398,7 +398,7 @@ class FilmmakinesiProvider : MainAPI() {
             ).url
             if (interceptedUrl.isNotBlank() &&
                 interceptedUrl != lastPageUrl &&
-                Regex("""(?i)(\\.m3u8|master\\.txt|index\\.txt|playlist)""").containsMatchIn(interceptedUrl)
+                Regex("""(?i)(\.m3u8|master\.txt|index\.txt|playlist)""").containsMatchIn(interceptedUrl)
             ) {
                 Log.i(TAG, "WebView medya isteği yakaladı (host=" + FilmmakinesiParsing.hostOf(interceptedUrl) + ")")
                 if (emitStreams(listOf(interceptedUrl), playerUrl, lastPageUrl, callback)) return true
