@@ -272,6 +272,7 @@ class FilmmakinesiParsingTest {
         assertTrue(FilmmakinesiParsing.isLikelyHls("https://hls8.playmix.uno/hls/x.mp4/master.txt"))
         assertTrue(FilmmakinesiParsing.isLikelyHls("https://cdn.x/hls/f/index.m3u8?tok=1"))
         assertFalse(FilmmakinesiParsing.isLikelyHls("https://cdn.x/video/film.mp4"))
+        assertFalse(FilmmakinesiParsing.isLikelyHls("https://cdn.x/hls/film.mp4?token=1"))
     }
 
     @Test
