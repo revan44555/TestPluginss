@@ -211,6 +211,7 @@ class FilmmakinesiParsingTest {
         val html = """
             <script>
               var file_link = "this-is-a-secret-fragment-98765";
+              var token = `TOPSECRET123456`;
               var stream = "https://cdn.example/hls/master.m3u8?token=TOPSECRET123";
               var src = atob(file_link.split('').reverse().join(''));
               var encoded = String.fromCharCode(104,116,116,112,115,58,47,47,115,101,99,114,101,116,46,101,120,97,109,112,108,101);
@@ -223,6 +224,8 @@ class FilmmakinesiParsingTest {
         assertTrue(snippet.contains("atob("))
         assertTrue(snippet.contains("fromCharCode"))
         assertFalse(snippet.contains("TOPSECRET123"))
+        assertFalse(snippet.contains("TOPSECRET123456"))
+        assertTrue(snippet.contains("[TEMPLATE_LITERAL:14]"))
         assertFalse(snippet.contains("this-is-a-secret-fragment"))
         assertFalse(snippet.contains("https://cdn.example"))
         assertTrue(snippet.contains("[NUMERIC_ARRAY]"))
