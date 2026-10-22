@@ -116,4 +116,23 @@ class FilmmakinesiParsingTest {
         assertEquals("CloseLoad", FilmmakinesiParsing.playerLabel("https://closeload.filmmakinesi.to/video/embed/x"))
         assertEquals("Kaynak", FilmmakinesiParsing.playerLabel("https://other.example/e"))
     }
+
+    @Test
+    fun unpacksDeanEdwardsPackerAndFindsStream() {
+        val packed = "eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(" +
+            "new RegExp('\\\\b'+c+'\\\\b','g'),k[c]);return p}" +
+            "('0 1 2',62,3,'var|source|"https:"+"//cdn.x.y/"+"film"+".m3u8?token=xyz";|'." +
+            "split('|'),0,{}))"
+        val urls = FilmmakinesiParsing.extractStreamUrls(packed)
+        assertTrue(urls.any { it.contains("cdn.x.y/film.m3u8") })
+    }
+
+    @Test
+    fun decodesBase64EmbeddedStream() {
+        val b64 = java.util.Base64.getEncoder()
+            .encodeToString("https://cdn.x.y/playlist.m3u8?sig=zz".toByteArray())
+        val urls = FilmmakinesiParsing.extractStreamUrls(
+            "<script>var s=atob(\"$b64\");</script>")
+        assertTrue(urls.any { it.contains("playlist.m3u8") })
+    }
 }
