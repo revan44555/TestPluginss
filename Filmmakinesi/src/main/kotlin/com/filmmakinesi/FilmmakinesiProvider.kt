@@ -6,7 +6,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import kotlinx.coroutines.delay
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
@@ -213,7 +212,9 @@ class FilmmakinesiProvider : MainAPI() {
         // Interstitial cookie set edip ayni URL'yi yeniden yukluyor
         // olabilir; tek seferlik kisa bekleyisle son kez dene.
         if (lastRaw.isNotEmpty() && visited.size == 1) {
-            delay(800)
+            // kotlinx-coroutines eklenti classpath'inde yok; IO
+            // is parcaciginda kisa bloklama tolere edilebilir.
+            Thread.sleep(800)
             val retry = try {
                 app.get(playerUrl, headers = headers + mapOf("Referer" to referer))
             } catch (cancelled: CancellationException) {
